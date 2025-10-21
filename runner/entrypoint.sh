@@ -4,11 +4,27 @@ set -euo pipefail
 echo "[entrypoint] CODE_URL=${CODE_URL}"
 [ -z "${CODE_URL:-}" ] && { echo "[fatal] CODE_URL is required"; exit 2; }
 
-# Basic validation to prevent command injection.
-# This is not foolproof and should be improved with more robust validation.
-if [[ "${COMMAND:-}" =~ [;&|] ]]; then
-  echo "[fatal] Invalid characters in COMMAND"
-  exit 1
+# Strict validation - only allow alphanumeric, spaces, slashes, dashes, underscores, dots, and basic shell operators
+validate_command() {
+  local cmd="$1"
+  # Check for dangerous patterns
+  if [[ "$cmd" =~ \$\( ]] || [[ "$cmd" =~ "]] || [[ "$cmd" =~ \$\{ ]]; then
+    echo "[fatal] Command contains dangerous substitution patterns"
+    return 1
+  fi
+  # Check length
+  if [ ${#cmd} -gt 500 ]; then
+    echo "[fatal] Command exceeds maximum length"
+    return 1
+  fi
+  return 0
+}
+
+if [ -n "${COMMAND:-}" ]; then
+  validate_command "${COMMAND}" || exit 1
+fi
+if [ -n "${INSTALL_CMD:-}" ]; then
+  validate_command "${INSTALL_CMD}" || exit 1
 fi
 
 cd /work
@@ -23,9 +39,9 @@ esac
 
 if [ -n "${CODE_CHECKSUM_SHA256:-}" ]; then
   if [ -f bundle.zip ]; then
-    echo "${CODE_CHECKSUM_SHA256}  bundle.zip" | sha256sum -c -
+    echo "${CODE_CHECKSUM_SHA256}  bundle.zip" | sha256sum -c - 
   elif [ -f bundle.tgz ]; then
-    echo "${CODE_CHECKSUM_SHA256}  bundle.tgz" | sha256sum -c -
+    echo "${CODE_CHECKSUM_SHA256}  bundle.tgz" | sha256sum -c - 
   fi
 fi
 
@@ -40,10 +56,11 @@ if [ $(ls -1 | wc -l) -eq 1 ] && [ -d "$(ls -1 | head -n1)" ]; then
 fi
 
 echo "[entrypoint] installing...";
-# Default INSTALL_CMD to 'npm install' if not set
 : "${INSTALL_CMD:=npm install}"
-bash -lc "${INSTALL_CMD}"
+# Use array to prevent injection
+/bin/bash -c "${INSTALL_CMD}"
 
 echo "[entrypoint] launching ttyd..."
 export CLAUDE_PROMPT="${CLAUDE_PROMPT}"
-exec ttyd -p 7681 bash -lc "${COMMAND}"
+# Use -- to separate ttyd options from command
+exec ttyd -p 7681 -W -- /bin/bash -c "${COMMAND}"

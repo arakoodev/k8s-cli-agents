@@ -1,0 +1,180 @@
+# Default deny all ingress to runner pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-default-deny-ingress
+  namespace: ws-cli
+spec:
+  podSelector:
+    matchLabels:
+      app: ws-cli-runner
+  policyTypes:
+    - Ingress
+  ingress: []
+
+---
+# Allow ingress to runner only from gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-allow-from-gateway
+  namespace: ws-cli
+spec:
+  podSelector:
+    matchLabels:
+      app: ws-cli-runner
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ws-cli-gateway
+      ports:
+        - protocol: TCP
+          port: 7681
+
+---
+# Restrict runner egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-egress-restrictions
+  namespace: ws-cli
+spec:
+  podSelector:
+    matchLabels:
+      app: ws-cli-runner
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow HTTPS to Anthropic API
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+      # You can further restrict to specific IPs if known
+
+    # Allow HTTP/HTTPS for downloading code bundles
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+
+    # Block all other egress (especially metadata service)
+    # Note: This policy works with default deny, so anything not explicitly allowed is blocked
+
+---
+# Allow controller to access Kubernetes API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: controller-allow-k8s-api
+  namespace: ws-cli
+spec:
+  podSelector:
+    matchLabels:
+      app: ws-cli-controller
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow access to Kubernetes API server
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+
+---
+# Allow gateway to access pods in the namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-allow-pod-access
+  namespace: ws-cli
+spec:
+  podSelector:
+    matchLabels:
+      app: ws-cli-gateway
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow access to runner pods
+    - to:
+        - podSelector:
+            matchLabels:
+              app: ws-cli-runner
+      ports:
+        - protocol: TCP
+          port: 7681
+
+    # Allow access to controller
+    - to:
+        - podSelector:
+            matchLabels:
+              app: ws-cli-controller
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Allow ingress to controller from gateway (for JWKS)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: controller-allow-from-gateway
+  namespace: ws-cli
+spec:
+  podSelector:
+    matchLabels:
+      app: ws-cli-controller
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ws-cli-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Also allow from ingress controller
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080

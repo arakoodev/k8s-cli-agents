@@ -1,52 +1,42 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ws-cli-controller
+  name: ws-cli-gateway
   namespace: ws-cli
 spec:
-  replicas: 2
-  selector: { matchLabels: { app: ws-cli-controller } }
+  replicas: 3
+  selector: { matchLabels: { app: ws-cli-gateway } }
   template:
-    metadata: { labels: { app: ws-cli-controller } }
+    metadata: { labels: { app: ws-cli-gateway } }
     spec:
-      serviceAccountName: ws-cli-controller
       containers:
-      # Main controller container
-      - name: controller
-        image: ${CONTROLLER_IMG}
+      # Main gateway container
+      - name: gateway
+        image: ${GATEWAY_IMG}
         imagePullPolicy: IfNotPresent
         env:
-          - name: NAMESPACE
-            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-          - name: RUNNER_IMAGE
-            value: "${RUNNER_IMG}"
-          - name: JOB_TTL_SECONDS
-            value: "300"
-          - name: JOB_ACTIVE_DEADLINE_SECONDS
-            value: "3600"
+          - name: PORT
+            value: "8080"
+          - name: CONTROLLER_URL
+            value: "http://ws-cli-controller.ws-cli.svc.cluster.local"
           - name: DATABASE_URL
             valueFrom:
               secretKeyRef:
                 name: pg
                 key: DATABASE_URL
-          - name: JWT_PRIVATE_KEY_PATH
-            value: "/run/secrets/jwt/private.pem"
-          - name: ALLOWED_ORIGINS
-            value: "https://yourdomain.com,https://app.yourdomain.com"
-          - name: ALLOWED_CODE_DOMAINS
-            value: "github.com,gitlab.com,*.github.com"
-          - name: NODE_ENV
-            value: "production"
+          - name: LOG_LEVEL
+            value: "info"
         ports:
           - name: http
             containerPort: 8080
-        volumeMounts:
-          - name: jwt-keys
-            mountPath: /run/secrets/jwt
-            readOnly: true
+            protocol: TCP
         resources:
-          requests: { cpu: "100m", memory: "128Mi" }
-          limits:   { cpu: "500m", memory: "512Mi" }
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "1000m"
+            memory: "512Mi"
         livenessProbe:
           httpGet:
             path: /healthz
@@ -56,7 +46,7 @@ spec:
           timeoutSeconds: 5
         readinessProbe:
           httpGet:
-            path: /readyz
+            path: /healthz
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
@@ -86,33 +76,58 @@ spec:
             cpu: "200m"
             memory: "128Mi"
 
-      volumes:
-        - name: jwt-keys
-          secret:
-            secretName: jwt
-
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: ws-cli-controller, namespace: ws-cli }
+metadata:
+  name: ws-cli-gateway
+  namespace: ws-cli
 spec:
-  selector: { app: ws-cli-controller }
-  ports: [ { name: http, port: 80, targetPort: 8080 } ]
+  selector: { app: ws-cli-gateway }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
   type: ClusterIP
 
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ws-cli-controller
+  name: ws-cli-gateway
   namespace: ws-cli
   annotations:
     kubernetes.io/ingress.class: "gce"
+    cloud.google.com/backend-config: '{"default": "ws-gateway-backendconfig"}'
 spec:
   rules:
-    - host: ${DOMAIN}
+    - host: ${WS_DOMAIN}
       http:
         paths:
           - path: /
             pathType: Prefix
-            backend: { service: { name: ws-cli-controller, port: { number: 80 } } }
+            backend:
+              service:
+                name: ws-cli-gateway
+                port:
+                  number: 80
+
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: ws-gateway-backendconfig
+  namespace: ws-cli
+spec:
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 60
+  healthCheck:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /healthz
+    port: 8080

@@ -9,7 +9,11 @@ const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 const port = Number(process.env.PORT || 8080);
 const controllerUrl = process.env.CONTROLLER_URL || 'http://localhost:8080';
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false
+});
+
 pool.on('error', (err) => {
   log.error({ err }, 'database pool error');
 });
@@ -17,6 +21,13 @@ pool.on('error', (err) => {
 const proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: true });
 
 const server = http.createServer((req, res) => {
+  // Add health check endpoint
+  if (req.url === '/healthz') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('ok');
+    return;
+  }
+
   res.writeHead(404, { 'Content-Type': 'text/plain' });
   res.end('not found');
 });
