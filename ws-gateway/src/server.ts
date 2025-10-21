@@ -2,7 +2,7 @@ import http from 'http';
 import httpProxy from 'http-proxy';
 import pino from 'pino';
 import pg from 'pg';
-import { verifySessionJWT } from './sessionJwt.js';
+import { verifySessionJWT } from './sessionJwt';
 
 const { Pool } = pg;
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
