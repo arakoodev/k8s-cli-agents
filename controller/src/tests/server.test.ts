@@ -36,6 +36,9 @@ describe('Controller API', () => {
         await db.none('TRUNCATE sessions RESTART IDENTITY');
         await db.none('TRUNCATE token_jti RESTART IDENTITY');
 
+        // Clear the module cache to get a fresh app instance with fresh rate limiters
+        jest.resetModules();
+
         // Dynamically import the app to use the fresh mocks
         const module = await import('../server');
         app = (module as any).app;

@@ -303,20 +303,6 @@ app.get('/api/sessions/:id', requireFirebaseUser, asyncHandler(async (req,res)=>
   res.json(session);
 }));
 
-const server = app.listen(port, ()=>log.info({port},'controller listening'));
-
-const gracefulShutdown = async (signal: string) => {
-  log.warn(`${signal} received, shutting down`);
-  server.close(async () => {
-    log.info('HTTP server closed');
-    await closeDatabasePool();
-    process.exit(0);
-  });
-};
-
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
 // Global error handler (should be last)
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   log.error({ err, path: req.path, method: req.method }, 'Unhandled error');
@@ -325,3 +311,23 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Export the app for testing
+export { app };
+
+// Only start the server if this is the main module
+if (require.main === module) {
+  const server = app.listen(port, ()=>log.info({port},'controller listening'));
+
+  const gracefulShutdown = async (signal: string) => {
+    log.warn(`${signal} received, shutting down`);
+    server.close(async () => {
+      log.info('HTTP server closed');
+      await closeDatabasePool();
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+}
