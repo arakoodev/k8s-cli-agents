@@ -32,8 +32,9 @@ describe('Controller API', () => {
     beforeEach(async () => {
         // Reset mocks and the database before each test
         mockCreateNamespacedJob.mockClear();
-        const db = (pool as any).connect();
-        await db.public.none('TRUNCATE sessions, token_jti RESTART IDENTITY');
+        const db = await (pool as any).connect();
+        await db.none('TRUNCATE sessions RESTART IDENTITY');
+        await db.none('TRUNCATE token_jti RESTART IDENTITY');
 
         // Dynamically import the app to use the fresh mocks
         const module = await import('../server');

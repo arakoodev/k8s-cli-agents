@@ -18,7 +18,7 @@ export const pool = new Pool({
 let isPoolHealthy = true;
 
 pool.on('error', (err, client) => {
-  log.error({ err, clientRemoteAddress: client?.['remoteAddress'] }, 'Database pool error - attempting recovery');
+  log.error({ err }, 'Database pool error - attempting recovery');
   isPoolHealthy = false;
 
   // Set a timer to mark as healthy again after a short period

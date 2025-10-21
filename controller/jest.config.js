@@ -4,4 +4,7 @@ module.exports = {
   testEnvironment: 'node',
   setupFilesAfterEnv: ['./src/tests/setup.ts'],
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+  moduleNameMapper: {
+    '^(\\.{1,2}/.*)\\.js$': '$1',
+  },
 };
