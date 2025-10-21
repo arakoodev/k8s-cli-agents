@@ -10,10 +10,24 @@ spec:
     metadata: { labels: { app: ws-cli-controller } }
     spec:
       serviceAccountName: ws-cli-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       # Main controller container
       - name: controller
         image: ${CONTROLLER_IMG}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+              - ALL
         imagePullPolicy: IfNotPresent
         env:
           - name: NAMESPACE

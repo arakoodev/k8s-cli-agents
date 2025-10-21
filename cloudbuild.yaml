@@ -58,6 +58,7 @@ steps:
     kubectl apply -f k8s/namespace.yaml
     kubectl apply -f k8s/rbac.yaml
     kubectl apply -f k8s/networkpolicy.yaml
+    kubectl apply -f k8s/resourcequota.yaml
 
     export CONTROLLER_IMG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-controller:$SHORT_SHA"
     export GATEWAY_IMG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-gateway:$SHORT_SHA"

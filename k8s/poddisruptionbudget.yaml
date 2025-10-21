@@ -1,0 +1,22 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ws-cli-controller-pdb
+  namespace: ws-cli
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ws-cli-controller
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ws-cli-gateway-pdb
+  namespace: ws-cli
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: ws-cli-gateway

@@ -167,10 +167,27 @@ app.post('/api/sessions', sessionLimiter, requireFirebaseUser, asyncHandler(asyn
         metadata: { labels: { app: 'ws-cli-runner', session: sessionId } },
         spec: {
           restartPolicy: 'Never',
+          securityContext: {
+            runAsNonRoot: true,
+            runAsUser: 1001,
+            fsGroup: 1001,
+            seccompProfile: {
+              type: 'RuntimeDefault'
+            }
+          },
           containers: [{
             name: 'runner',
             image: runnerImage,
             imagePullPolicy: 'IfNotPresent',
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              readOnlyRootFilesystem: false,
+              runAsNonRoot: true,
+              runAsUser: 1001,
+              capabilities: {
+                drop: ['ALL']
+              }
+            },
             env: [
               { name:'CODE_URL', value:String(code_url) },
               { name:'CODE_CHECKSUM_SHA256', value:String(code_checksum_sha256||'') },
@@ -178,7 +195,10 @@ app.post('/api/sessions', sessionLimiter, requireFirebaseUser, asyncHandler(asyn
               { name:'CLAUDE_PROMPT', value:String(prompt||'Analyze the authentication system and suggest improvements') },
             ],
             ports: [{ name:'ws', containerPort:7681 }],
-            resources: { requests:{cpu:'200m',memory:'256Mi'}, limits:{cpu:'1',memory:'1Gi'} }
+            resources: {
+              requests:{cpu:'200m',memory:'256Mi'},
+              limits:{cpu:'1',memory:'1Gi'}
+            }
           }]
         }
       }
