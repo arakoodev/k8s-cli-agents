@@ -1,0 +1,51 @@
+substitutions:
+  _REGION: us-central1
+  _LOCATION: us-central1
+  _REPO: apps
+  _CLUSTER: cli-runner-gke
+  _NAMESPACE: ws-cli
+  _DOMAIN: ws.example.com
+  _BASENAME: ws-cli
+
+options: { logging: CLOUD_LOGGING_ONLY }
+
+steps:
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk:470.0.0
+  id: get-credentials
+  entrypoint: bash
+  args: ["-c", "gcloud container clusters get-credentials ${_CLUSTER} --region ${_LOCATION}"]
+
+- name: gcr.io/cloud-builders/docker
+  id: build-runner
+  dir: runner
+  args: ["build","-t","${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-runner:$SHORT_SHA","."]
+- name: gcr.io/cloud-builders/docker
+  id: push-runner
+  args: ["push","${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-runner:$SHORT_SHA"]
+
+- name: gcr.io/cloud-builders/docker
+  id: build-controller
+  dir: controller
+  args: ["build","-t","${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-controller:$SHORT_SHA","."]
+- name: gcr.io/cloud-builders/docker
+  id: push-controller
+  args: ["push","${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-controller:$SHORT_SHA"]
+
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk:470.0.0
+  id: apply-k8s
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -euo pipefail
+    kubectl apply -f k8s/namespace.yaml
+    kubectl apply -f k8s/rbac.yaml
+    export CONTROLLER_IMG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-controller:$SHORT_SHA"
+    export RUNNER_IMG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-runner:$SHORT_SHA"
+    export DOMAIN="${_DOMAIN}"
+    envsubst < k8s/controller.yaml | kubectl apply -f -
+    kubectl -n ${_NAMESPACE} rollout status deploy/ws-cli-controller --timeout=5m
+
+images:
+- ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-runner:$SHORT_SHA
+- ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_BASENAME}-controller:$SHORT_SHA
