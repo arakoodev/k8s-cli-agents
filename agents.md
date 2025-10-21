@@ -19,6 +19,7 @@
 | 2025-10-16 | **SHA-256** verification & allowlist for bundles                                               | Supply-chain defense                                               | Reduce RCE/tarbomb risk                                                               |
 | 2025-10-18 | (Old plan) Redis session/JTI store                                                             | Needed multi-replica correctness                                   | **Replaced by Postgres** to simplify ops                                              |
 | 2025-10-21 | **Switch to PostgreSQL (Cloud SQL)** + **RS256/JWKS** + **WS Gateway** + **Firebase web demo** | Durable session/JTI, verifiable tokens at edge, full end-to-end UX | Production-leaning architecture; simpler reasoning; easier multi-service verification |
+| 2025-10-21 | **Full-stack security refactor** (IaC + App)                                                 | Address vulnerabilities, align with docs, and adopt best practices | **Private VPC/GKE/SQL**, **RS256/JWKS** implemented, JTI replay, hardened runner script |
 
 ---
 
@@ -78,7 +79,6 @@
 
 ### P1 — Next
 
-* **Private IP** Cloud SQL + VPC-native GKE; restrict egress to DB subnets.
 * **Observability**: metrics—open WS, job spin-up latency, gateway CPU/mem/sockets, CLI stage durations; SLOs & alerts.
 * **Backpressure/quotas**: per-user session caps; graceful queueing if the cluster is saturated.
 * **Artifact scanning**: MIME/type checks, AV/heuristics scan, max archive size, and extraction sandbox.
@@ -124,14 +124,14 @@
 
 | Path                           | Why it matters                                                                                                |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `infra/*.tf`                   | Cloud SQL Postgres + GKE Autopilot + Artifact Registry cleanup                                                |
+| `infra/*.tf`                   | **Private VPC**, **private GKE Autopilot**, **private Cloud SQL**, Artifact Registry                                  |
 | `db/schema.sql`                | UNLOGGED `sessions` + `token_jti`, indexes, expiry triggers                                                   |
 | `k8s/controller.yaml`          | Controller + Cloud SQL Proxy sidecar; service; env wiring                                                     |
 | `k8s/gateway.yaml`             | WS Gateway + Cloud SQL Proxy sidecar; Ingress + BackendConfig                                                 |
 | `k8s/networkpolicy.yaml`       | Default-deny runner; allow gateway→runner ingress on `:7681`                                                  |
 | `controller/src/server.ts`     | Firebase verify → Job create → Postgres writes → mint RS256 session-JWT → respond `{sessionId, wsUrl, token}` |
-| `controller/src/jwt.ts`        | RS256 signer + **JWKS endpoint** (swap to KMS here)                                                           |
-| `ws-gateway/src/server.ts`     | WS upgrade handler, JWT verify, `{sessionId→podIP}` lookup, proxy to `podIP:7681`                             |
+| `controller/src/sessionJwt.ts` | **RS256 signer** (from secret) + **JWKS endpoint** (swap to KMS here)                                         |
+| `ws-gateway/src/server.ts`     | WS upgrade handler, **JWT verify via JWKS**, `{sessionId→podIP}` DB lookup, JTI replay check, proxy to runner   |
 | `runner/entrypoint.sh`         | Fetch/verify bundle, install, launch **ttyd** with your CLI command                                           |
 | `sample-cli/src/index.ts`      | Stage-wise progress UX mirroring the video                                                                    |
 | `sample-cli/src/lib/claude.ts` | `claude` CLI shell-out + Anthropic SDK fallback                                                               |
@@ -147,8 +147,8 @@
 
 ### Appendix B — Threat Model Highlights
 
-* **Token theft** → short-lived RS256 JWT + JTI one-time use (in Postgres) + TLS.
-* **Tarbomb/RCE** → checksum + allowlist + size limits + safe extraction; consider sandboxing extraction.
+* **Token theft** → short-lived **RS256 JWT** (verified via **JWKS** at edge) + **JTI one-time use** (in Postgres) + TLS.
+* **Tarbomb/RCE** → checksum + allowlist + size limits + safe extraction; runner script hardened.
 * **Pod pivot** → default-deny egress; non-root; read-only FS; minimal capabilities.
 
 ---

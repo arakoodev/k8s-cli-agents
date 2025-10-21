@@ -33,7 +33,7 @@ flowchart LR
     A1["Firebase Auth (ID Token)"]
     A2["xterm.js Terminal"]
   end
-  subgraph GKE["GKE Autopilot Cluster (Namespace: ws-cli)"]
+  subgraph GKE["GKE Autopilot Cluster (Private VPC)"]
     C1["Controller API"]
     G1["WS Gateway"]
     R1["Ephemeral Runner Pod (ttyd)"]
@@ -60,14 +60,15 @@ flowchart LR
 
 * Express API verifying Firebase ID tokens.
 * Creates Kubernetes Jobs (one per session).
-* Inserts session metadata and JTI into PostgreSQL.
-* Mints **RS256 JWTs** signed by local PEMs or KMS.
-* Exposes `/.well-known/jwks.json` for JWKS validation.
+* Inserts session metadata and **one-time JTI** into PostgreSQL.
+* Mints **RS256 JWTs** signed by a private key from a K8s secret.
+* Exposes a public **`/.well-known/jwks.json`** endpoint for token verification.
 
 ### **2. WebSocket Gateway**
 
 * Stateless Node.js proxy layer.
-* Verifies JWT against JWKS/public key.
+* Verifies session JWTs against the controller's public **JWKS endpoint**.
+* **Prevents JTI replay attacks** by checking/deleting the JTI in Postgres.
 * Fetches podIP from Postgres.
 * Streams WS traffic (client ⇄ runner).
 * Scales horizontally; use GCLB ingress.
@@ -105,13 +106,13 @@ flowchart LR
 
 Directory: `infra/`
 
-Creates:
+Creates a secure, private foundation for the application:
 
-* Artifact Registry `apps`
-* Autopilot GKE cluster
-* Cloud SQL (Postgres 15)
-* SQL DB + user
-* Enables required APIs (`sqladmin`, `container`)
+* **Dedicated VPC** (`ws-cli-vpc`) with a subnet for GKE.
+* **Private GKE Autopilot cluster** with no public control plane endpoint.
+* **Private Cloud SQL (Postgres 15)** instance accessible only from within the VPC.
+* **Artifact Registry** repo with a 7-day cleanup policy for untagged images.
+* Enables required GCP APIs.
 
 Example use:
 
@@ -122,20 +123,26 @@ terraform apply \
   -var="project_id=YOUR_PROJECT" \
   -var="region=us-central1" \
   -var="db_user=appuser" \
-  -var="db_password=STRONG_PASSWORD" \
-  -var="db_name=wscli"
+  -var="db_password=STRONG_PASSWORD"
 ```
 
 Outputs:
 
-* `instance_connection_name`
-* `db_user`, `db_name`
+* `instance_connection_name` for the Cloud SQL proxy.
+* `db_user` and `db_name` for configuring the application.
 
-Connect:
+Connect to the private database instance using the Cloud SQL Auth Proxy:
 
 ```bash
-gcloud sql connect ws-cli-pg --user=appuser
-psql> \i db/schema.sql
+# First, get the connection name from terraform output
+export INSTANCE_CONNECTION_NAME=$(terraform -chdir=infra output -raw instance_connection_name)
+
+# In a separate terminal, start the proxy
+gcloud sql connect ws-cli-pg --instance-connection-name=$INSTANCE_CONNECTION_NAME
+
+# Now you can connect using psql
+psql "host=127.0.0.1 port=5432 sslmode=disable dbname=wscli user=appuser"
+> \i ../db/schema.sql
 ```
 
 ---
@@ -149,13 +156,12 @@ kubectl create namespace ws-cli || true
 
 # JWT keys (generate locally)
 openssl genpkey -algorithm RSA -out private.pem -pkeyopt rsa_keygen_bits:2048
-openssl rsa -in private.pem -pubout -out public.pem
-kubectl -n ws-cli create secret generic jwt \
-  --from-file=private.pem --from-file=public.pem
+kubectl -n ws-cli create secret generic jwt --from-file=private.pem
 
-# DB URL
+# DB URL for the app to connect to the Cloud SQL Proxy sidecar
+export DB_PASSWORD="STRONG_PASSWORD" # Use the same password as in terraform
 kubectl -n ws-cli create secret generic pg \
-  --from-literal=url="postgres://appuser:STRONG_PASSWORD@127.0.0.1:5432/wscli"
+  --from-literal=DATABASE_URL="postgres://appuser:${DB_PASSWORD}@127.0.0.1:5432/wscli"
 
 # Cloud SQL connection name
 kubectl -n ws-cli create configmap cloudsql \
@@ -210,20 +216,20 @@ envsubst < k8s/gateway.yaml | kubectl apply -f -
 
 ## 🔒 Security Model
 
-| Layer             | Mechanism                        | Purpose                      |
-| ----------------- | -------------------------------- | ---------------------------- |
-| User → Controller | Firebase ID token                | Authenticates human identity |
-| Controller → User | RS256 Session JWT                | Grants session access        |
-| Gateway           | JWT verify + Postgres lookup     | Authorizes WS access         |
-| Runner            | TTL Job + NetworkPolicy          | Hard isolation per user      |
-| DB                | Expiry trigger + unlogged tables | Fast writes, auto-cleanup    |
+| Layer             | Mechanism                                                    | Purpose                                    |
+| ----------------- | ------------------------------------------------------------ | ------------------------------------------ |
+| User → Controller | Firebase ID token                                            | Authenticates human identity               |
+| Controller → User | Short-lived **RS256 Session JWT** w/ **one-time JTI**        | Grants single-session access               |
+| Gateway           | **JWT verify via JWKS** + **JTI replay prevention** (Postgres) | Authorizes WS upgrade and prevents reuse   |
+| Runner            | TTL Job + NetworkPolicy                                      | Hard isolation per user                    |
+| DB                | **Private IP** + Expiry trigger + unlogged tables            | Secure, fast writes, and auto-cleanup      |
 
 ### Additional Hardening (Recommended)
 
-* Replace PEMs with **Cloud KMS-backed** keys and publish via JWKS.
-* Move Cloud SQL to **Private IP**; add **VPC-SC** restrictions.
-* Use **Cloud Armor** to rate-limit `/api/sessions`.
-* Validate bundle domains & sizes; checksum verification.
+* Replace local PEMs with **Cloud KMS-backed** keys for signing.
+* Implement **VPC-SC** restrictions for an extra security boundary.
+* Use **Cloud Armor** to rate-limit `/api/sessions` and protect from DDoS.
+* Add robust bundle validation (domain allowlists, size limits, static analysis).
 
 ---
 
@@ -290,7 +296,7 @@ full-agent-stack-pg-sql/
 | Step                      | Command                                                  |
 | ------------------------- | -------------------------------------------------------- |
 | 1️⃣ Terraform infra       | `cd infra && terraform apply`                            |
-| 2️⃣ Init DB schema        | `psql -h 127.0.0.1 -U appuser -d wscli -f db/schema.sql` |
+| 2️⃣ Init DB schema        | `psql "host=127.0.0.1 port=5432 sslmode=disable dbname=wscli user=appuser" -f db/schema.sql` (after starting proxy) |
 | 3️⃣ Create K8s secrets    | see section above                                        |
 | 4️⃣ Build & deploy        | `gcloud builds submit --config cloudbuild.yaml ...`      |
 | 5️⃣ Run frontend          | `npx http-server frontend -p 3000`                       |
