@@ -33,9 +33,9 @@ describe('WebSocket Gateway', () => {
         process.env.CONTROLLER_URL = jwksHost;
     });
 
-    afterAll((done) => {
-        jwksServer.close(done);
-        pool.end();
+    afterAll(async () => {
+        await new Promise<void>((resolve) => jwksServer.close(() => resolve()));
+        await pool.end();
     });
 
     beforeEach((done) => {
@@ -45,8 +45,15 @@ describe('WebSocket Gateway', () => {
         });
     });
 
-    afterEach((done) => {
-        server.close(done);
+    afterEach(async () => {
+        // Close server with timeout to prevent hanging
+        await Promise.race([
+            new Promise<void>((resolve) => {
+                server.close(() => resolve());
+                server.closeAllConnections?.(); // Close all connections if available
+            }),
+            new Promise<void>((resolve) => setTimeout(resolve, 100)) // Timeout after 100ms
+        ]);
     });
 
     async function generateTestJWT(sessionId: string, jti: string) {

@@ -7,7 +7,11 @@ import { verifySessionJWT } from './sessionJwt';
 const { Pool } = pg;
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 const port = Number(process.env.PORT || 8080);
-const controllerUrl = process.env.CONTROLLER_URL || 'http://localhost:8080';
+
+// Lazy load controller URL to allow tests to set it before first use
+function getControllerUrl() {
+  return process.env.CONTROLLER_URL || 'http://localhost:8080';
+}
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -50,7 +54,7 @@ app.on('upgrade', async (req, socket, head) => {
       return socket.destroy();
     }
 
-    const jwksUrl = `${controllerUrl}/.well-known/jwks.json`;
+    const jwksUrl = `${getControllerUrl()}/.well-known/jwks.json`;
     const claims: any = await verifySessionJWT(token, 'ws', jwksUrl);
     if (claims.sid !== sessionId) {
       log.warn('sid mismatch');

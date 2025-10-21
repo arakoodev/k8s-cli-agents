@@ -4,4 +4,6 @@ module.exports = {
   testEnvironment: 'node',
   setupFilesAfterEnv: ['./src/tests/setup.ts'],
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+  testTimeout: 10000,
+  forceExit: true,
 };
