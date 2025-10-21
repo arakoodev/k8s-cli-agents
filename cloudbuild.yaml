@@ -68,6 +68,7 @@ steps:
 
     envsubst < k8s/controller.yaml | kubectl apply -f -
     envsubst < k8s/gateway.yaml | kubectl apply -f -
+    kubectl apply -f k8s/hpa.yaml
 
     kubectl -n ${_NAMESPACE} rollout status deploy/ws-cli-controller --timeout=5m
     kubectl -n ${_NAMESPACE} rollout status deploy/ws-cli-gateway --timeout=5m

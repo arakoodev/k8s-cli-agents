@@ -1,3 +1,11 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ws-cli-controller
+  namespace: ws-cli
+  annotations:
+    iam.gke.io/gcp-service-account: ws-cli-controller@${PROJECT_ID}.iam.gserviceaccount.com
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

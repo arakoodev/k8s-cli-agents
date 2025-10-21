@@ -118,3 +118,29 @@ resource "google_artifact_registry_repository" "main" {
   }
   depends_on = [google_project_service.apis]
 }
+
+resource "google_service_account" "controller" {
+  project      = var.project_id
+  account_id   = "ws-cli-controller"
+  display_name = "ws-cli-controller"
+}
+
+resource "google_project_iam_member" "controller_k8s_job_creator" {
+  project = var.project_id
+  role    = "roles/container.developer" # More granular role is better
+  member  = "serviceAccount:${google_service_account.controller.email}"
+}
+
+resource "google_project_iam_member" "controller_firebase_auth" {
+  project = var.project_id
+  role    = "roles/firebaseauth.viewer"
+  member  = "serviceAccount:${google_service_account.controller.email}"
+}
+
+resource "google_iam_policy_binding" "controller_workload_identity" {
+  project = var.project_id
+  role    = "roles/iam.workloadIdentityUser"
+  members = [
+    "serviceAccount:${var.project_id}.svc.id.goog[ws-cli/ws-cli-controller]",
+  ]
+}

@@ -1,4 +1,8 @@
 terraform {
+  backend "gcs" {
+    bucket  = "your-tf-state-bucket"
+    prefix  = "cliscale"
+  }
   required_version = ">= 1.0"
   required_providers {
     google = {

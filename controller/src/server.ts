@@ -7,10 +7,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { createSessionJWT, getJWKS } from './sessionJwt.js';
-import { pool, checkDatabaseHealth } from './db.js';
+import { pool, checkDatabaseHealth, closeDatabasePool } from './db.js';
 import rateLimit from 'express-rate-limit';
 import { validateCodeUrl, validateCommand, validateChecksum, validatePrompt } from './validation.js';
 import { asyncHandler } from './asyncHandler.js';
+import { randomUUID } from 'crypto';
 
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 const app = express();
@@ -34,16 +35,25 @@ app.use(cors({
   maxAge: 86400 // 24 hours
 }));
 app.use(express.json({ limit: '1mb' }));
-app.use(pinoHttp({ logger: log }));
+app.use(pinoHttp({
+  logger: log,
+  genReqId: function (req, res) {
+    const existingId = req.id ?? req.headers["x-request-id"];
+    if (existingId) return existingId;
+    const id = randomUUID();
+    res.setHeader('X-Request-Id', id);
+    return id;
+  }
+}));
 
 initializeApp({ credential: applicationDefault() });
 
 const port = Number(process.env.PORT || 8080);
 const namespace = process.env.NAMESPACE || 'ws-cli';
 const runnerImage = process.env.RUNNER_IMAGE || 'REPLACEME';
-const ttlSeconds = Number(process.env.JOB_TTL_SECONDS || 300);
-const adSeconds = Number(process.env.JOB_ACTIVE_DEADLINE_SECONDS || 3600);
-const sessionExpirySeconds = 10 * 60;
+const jobTtlSeconds = Number(process.env.JOB_TTL_SECONDS || 300);
+const jobActiveDeadlineSeconds = Number(process.env.JOB_ACTIVE_DEADLINE_SECONDS || 3600);
+const sessionExpirySeconds = Number(process.env.SESSION_EXPIRY_SECONDS || 10 * 60);
 
 // Per-user session creation rate limit
 const sessionLimiter = rateLimit({
@@ -160,8 +170,8 @@ app.post('/api/sessions', sessionLimiter, requireFirebaseUser, asyncHandler(asyn
     kind: 'Job',
     metadata: { name: jobName, namespace },
     spec: {
-      ttlSecondsAfterFinished: ttlSeconds,
-      activeDeadlineSeconds: adSeconds,
+      ttlSecondsAfterFinished: jobTtlSeconds,
+      activeDeadlineSeconds: jobActiveDeadlineSeconds,
       backoffLimit: 0,
       template: {
         metadata: { labels: { app: 'ws-cli-runner', session: sessionId } },
@@ -294,6 +304,18 @@ app.get('/api/sessions/:id', requireFirebaseUser, asyncHandler(async (req,res)=>
 }));
 
 const server = app.listen(port, ()=>log.info({port},'controller listening'));
+
+const gracefulShutdown = async (signal: string) => {
+  log.warn(`${signal} received, shutting down`);
+  server.close(async () => {
+    log.info('HTTP server closed');
+    await closeDatabasePool();
+    process.exit(0);
+  });
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Global error handler (should be last)
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

@@ -20,7 +20,7 @@ pool.on('error', (err) => {
 
 const proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: true });
 
-const server = http.createServer((req, res) => {
+export const app = http.createServer((req, res) => {
   // Add health check endpoint
   if (req.url === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -32,7 +32,7 @@ const server = http.createServer((req, res) => {
   res.end('not found');
 });
 
-server.on('upgrade', async (req, socket, head) => {
+app.on('upgrade', async (req, socket, head) => {
   try {
     const url = new URL(req.url || '', `http://${req.headers.host}`);
     const m = url.pathname.match(/^\/ws\/(.+)$/);
@@ -82,4 +82,6 @@ server.on('upgrade', async (req, socket, head) => {
   }
 });
 
-server.listen(port, () => log.info({ port }, 'ws-gateway listening'));
+if (require.main === module) {
+  app.listen(port, () => log.info({ port }, 'ws-gateway listening'));
+}
