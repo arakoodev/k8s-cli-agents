@@ -7,8 +7,8 @@ const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   // Add connection pool configuration
-  max: 20, // Maximum number of clients
-  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  max: process.env.DB_MAX_CONNECTIONS ? parseInt(process.env.DB_MAX_CONNECTIONS) : 20, // Maximum number of clients
+  idleTimeoutMillis: process.env.DB_IDLE_TIMEOUT_MILLIS ? parseInt(process.env.DB_IDLE_TIMEOUT_MILLIS) : 30000, // Close idle clients after 30 seconds
   connectionTimeoutMillis: 10000, // Timeout after 10 seconds trying to connect
   // Enable SSL for Cloud SQL
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false

@@ -1,0 +1,169 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ws-cli-gateway
+  namespace: {{ .Values.namespace }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .Values.gateway.serviceAccount.gcpServiceAccount }}
+  labels:
+    {{- include "cliscale.labels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cliscale.fullname" . }}-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cliscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cliscale.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "cliscale.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: ws-cli-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: gateway
+        image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+              - ALL
+        env:
+          - name: PORT
+            value: "8080"
+          - name: CONTROLLER_URL
+            value: "http://{{ include "cliscale.fullname" . }}-controller.{{ .Values.namespace }}.svc.cluster.local"
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.gateway.secrets.databaseUrl }}
+                key: DATABASE_URL
+          - name: LOG_LEVEL
+            value: "{{ .Values.gateway.env.logLevel }}"
+        ports:
+          - name: http
+            containerPort: 8080
+            protocol: TCP
+        resources:
+          {{- toYaml .Values.gateway.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+      {{- if .Values.cloudsql.enabled }}
+      - name: cloud-sql-proxy
+        image: "{{ .Values.cloudsql.image }}"
+        args:
+          - "--structured-logs"
+          - "--port=5432"
+          - "{{ .Values.cloudsql.instanceConnectionName }}"
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+        resources:
+          {{- toYaml .Values.cloudsql.resources | nindent 10 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cliscale.fullname" . }}-gateway
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    {{- include "cliscale.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cliscale.fullname" . }}-gateway
+  namespace: {{ .Values.namespace }}
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    {{- if .Values.gateway.backendConfig.enabled }}
+    cloud.google.com/backend-config: '{"default": "{{ include "cliscale.fullname" . }}-gateway-backendconfig"}'
+    {{- end }}
+spec:
+  tls:
+  - hosts:
+    - {{ .Values.wsDomain }}
+    secretName: {{ .Values.gateway.tls.secretName }}
+  rules:
+    - host: {{ .Values.wsDomain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "cliscale.fullname" . }}-gateway
+                port:
+                  number: 80
+---
+{{- if .Values.gateway.backendConfig.enabled }}
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ include "cliscale.fullname" . }}-gateway-backendconfig
+  namespace: {{ .Values.namespace }}
+spec:
+  timeoutSec: {{ .Values.gateway.backendConfig.timeoutSec }}
+  connectionDraining:
+    drainingTimeoutSec: {{ .Values.gateway.backendConfig.drainingTimeoutSec }}
+  healthCheck:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /healthz
+    port: 8080
+{{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cliscale.fullname" . }}-gateway-pdb
+  namespace: {{ .Values.namespace }}
+spec:
+  minAvailable: {{ .Values.gateway.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "cliscale.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway

@@ -1,0 +1,168 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.controller.serviceAccount.name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .Values.controller.serviceAccount.gcpServiceAccount }}
+  labels:
+    {{- include "cliscale.labels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cliscale.fullname" . }}-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cliscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: {{ .Values.controller.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cliscale.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "cliscale.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      {{- if .Values.controller.serviceAccount.create }}
+      serviceAccountName: {{ .Values.controller.serviceAccount.name }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: controller
+        image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+              - ALL
+        env:
+          - name: NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          - name: RUNNER_IMAGE
+            value: "{{ .Values.controller.runnerImage }}"
+          - name: JOB_TTL_SECONDS
+            value: "{{ .Values.controller.env.jobTtlSeconds }}"
+          - name: JOB_ACTIVE_DEADLINE_SECONDS
+            value: "{{ .Values.controller.env.jobActiveDeadlineSeconds }}"
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.controller.secrets.databaseUrl }}
+                key: DATABASE_URL
+          - name: JWT_PRIVATE_KEY_PATH
+            value: "/run/secrets/jwt/private.pem"
+          - name: ALLOWED_ORIGINS
+            value: "{{ .Values.controller.env.allowedOrigins }}"
+          - name: ALLOWED_CODE_DOMAINS
+            value: "{{ .Values.controller.env.allowedCodeDomains }}"
+          - name: NODE_ENV
+            value: "{{ .Values.controller.env.nodeEnv }}"
+          - name: DB_MAX_CONNECTIONS
+            value: "{{ .Values.db.maxConnections }}"
+          - name: DB_IDLE_TIMEOUT_MILLIS
+            value: "{{ .Values.db.idleTimeoutMillis }}"
+        ports:
+          - name: http
+            containerPort: 8080
+        volumeMounts:
+          - name: jwt-keys
+            mountPath: /run/secrets/jwt
+            readOnly: true
+        resources:
+          {{- toYaml .Values.controller.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+      {{- if .Values.cloudsql.enabled }}
+      - name: cloud-sql-proxy
+        image: "{{ .Values.cloudsql.image }}"
+        args:
+          - "--structured-logs"
+          - "--port=5432"
+          - "{{ .Values.cloudsql.instanceConnectionName }}"
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+        resources:
+          {{- toYaml .Values.cloudsql.resources | nindent 10 }}
+      {{- end }}
+      volumes:
+        - name: jwt-keys
+          secret:
+            secretName: {{ .Values.controller.secrets.jwt }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cliscale.fullname" . }}-controller
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    {{- include "cliscale.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cliscale.fullname" . }}-controller
+  namespace: {{ .Values.namespace }}
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+spec:
+  tls:
+  - hosts:
+    - {{ .Values.domain }}
+    secretName: {{ .Values.controller.tls.secretName }}
+  rules:
+  - host: {{ .Values.domain }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "cliscale.fullname" . }}-controller
+            port:
+              number: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cliscale.fullname" . }}-controller-pdb
+  namespace: {{ .Values.namespace }}
+spec:
+  minAvailable: {{ .Values.controller.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "cliscale.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller

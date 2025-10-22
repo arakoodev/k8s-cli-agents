@@ -26,3 +26,31 @@ variable "db_name" {
   type        = string
   default     = "wscli"
 }
+
+variable "controller_image_tag" {
+  description = "The image tag for the controller service."
+  type        = string
+  default     = "latest"
+}
+
+variable "gateway_image_tag" {
+  description = "The image tag for the gateway service."
+  type        = string
+  default     = "latest"
+}
+
+variable "runner_image_tag" {
+  description = "The image tag for the runner service."
+  type        = string
+  default     = "latest"
+}
+
+variable "domain" {
+  description = "The domain for the controller ingress."
+  type        = string
+}
+
+variable "ws_domain" {
+  description = "The domain for the gateway ingress."
+  type        = string
+}

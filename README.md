@@ -147,42 +147,40 @@ psql "host=127.0.0.1 port=5432 sslmode=disable dbname=wscli user=appuser"
 
 ---
 
-## ☸️ Kubernetes Deployment
+## ☸️ Kubernetes Deployment (via Terraform & Helm)
 
-### Namespaces & Secrets
+The entire application, including all Kubernetes resources, is now deployed using the **Helm** provider within Terraform. This simplifies deployment by removing the need for manual `kubectl` commands and `envsubst`.
 
-```bash
-kubectl create namespace ws-cli || true
+The Helm chart is located in the `cliscale-chart/` directory. Terraform renders this chart and deploys it to the GKE cluster.
 
-# JWT keys (generate locally)
-openssl genpkey -algorithm RSA -out private.pem -pkeyopt rsa_keygen_bits:2048
-kubectl -n ws-cli create secret generic jwt --from-file=private.pem
+### Configuration
 
-# DB URL for the app to connect to the Cloud SQL Proxy sidecar
-export DB_PASSWORD="STRONG_PASSWORD" # Use the same password as in terraform
-kubectl -n ws-cli create secret generic pg \
-  --from-literal=DATABASE_URL="postgres://appuser:${DB_PASSWORD}@127.0.0.1:5432/wscli"
+All configuration is now managed through Terraform variables. You will need to provide values for the following in your `terraform apply` command or a `.tfvars` file:
 
-# Cloud SQL connection name
-kubectl -n ws-cli create configmap cloudsql \
-  --from-literal=INSTANCE_CONNECTION_NAME="$(terraform -chdir=infra output -raw instance_connection_name)"
-```
+*   `domain`: The public domain for the controller API (e.g., `cliscale.yourdomain.com`).
+*   `ws_domain`: The public domain for the WebSocket Gateway (e.g., `ws.yourdomain.com`).
+*   `controller_image_tag`: The Docker image tag for the controller.
+*   `gateway_image_tag`: The Docker image tag for the gateway.
 
-### Apply Manifests
+### Deploying the Application
+
+After initializing Terraform, run the `apply` command with the required variables:
 
 ```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/rbac.yaml
-kubectl apply -f k8s/networkpolicy.yaml
-
-export CONTROLLER_IMG="us-central1-docker.pkg.dev/PROJECT/apps/ws-cli-controller:latest"
-export GATEWAY_IMG="us-central1-docker.pkg.dev/PROJECT/apps/ws-cli-gateway:latest"
-export RUNNER_IMG="us-central1-docker.pkg.dev/PROJECT/apps/ws-cli-runner:latest"
-export DOMAIN="ws.example.com"
-
-envsubst < k8s/controller.yaml | kubectl apply -f -
-envsubst < k8s/gateway.yaml | kubectl apply -f -
+cd infra
+terraform init
+terraform apply \
+  -var="project_id=YOUR_PROJECT" \
+  -var="region=us-central1" \
+  -var="db_user=appuser" \
+  -var="db_password=STRONG_PASSWORD" \
+  -var="domain=cliscale.yourdomain.com" \
+  -var="ws_domain=ws.yourdomain.com" \
+  -var="controller_image_tag=latest" \
+  -var="gateway_image_tag=latest"
 ```
+
+Terraform will provision the GKE cluster, Cloud SQL instance, and then deploy the application using the Helm chart.
 
 ---
 
@@ -204,7 +202,7 @@ envsubst < k8s/gateway.yaml | kubectl apply -f -
    ```bash
    npx http-server frontend -p 3000
    ```
-3. Sign in → fill `controller` (https) and `gateway` (wss) URLs.
+3. Sign in → fill `controller` (https) and `gateway` (wss) URLs with the domains you configured in Terraform.
 4. Provide:
 
    * `code_url`:  a zip or Git repo
@@ -279,9 +277,9 @@ The bundled `sample-cli/` shows:
 ```
 full-agent-stack-pg-sql/
 ├── README.md
-├── infra/                  # Terraform (Cloud SQL + GKE + Artifact Registry)
+├── infra/                  # Terraform (Cloud SQL + GKE + Helm Deployment)
 ├── db/schema.sql           # Sessions + JTIs + expiry triggers
-├── k8s/                    # Namespace, RBAC, Deployments, Services, Ingress
+├── cliscale-chart/         # Helm chart for the application
 ├── controller/             # Express API + Firebase verify + JWT mint + JWKS
 ├── ws-gateway/             # Stateless WS proxy + JWT verify
 ├── runner/                 # Entry script + Dockerfile (downloads bundle)
@@ -295,12 +293,11 @@ full-agent-stack-pg-sql/
 
 | Step                      | Command                                                  |
 | ------------------------- | -------------------------------------------------------- |
-| 1️⃣ Terraform infra       | `cd infra && terraform apply`                            |
-| 2️⃣ Init DB schema        | `psql "host=127.0.0.1 port=5432 sslmode=disable dbname=wscli user=appuser" -f db/schema.sql` (after starting proxy) |
-| 3️⃣ Create K8s secrets    | see section above                                        |
-| 4️⃣ Build & deploy        | `gcloud builds submit --config cloudbuild.yaml ...`      |
-| 5️⃣ Run frontend          | `npx http-server frontend -p 3000`                       |
-| 6️⃣ Sign in & Run session | via browser UI                                           |
+| 1️⃣ Build Images          | `gcloud builds submit --config cloudbuild.yaml`          |
+| 2️⃣ Deploy Infra & App    | `cd infra && terraform apply` (with variables)           |
+| 3️⃣ Init DB schema        | `psql "host=127.0.0.1 port=5432 sslmode=disable dbname=wscli user=appuser" -f db/schema.sql` (after starting proxy) |
+| 4️⃣ Run frontend          | `npx http-server frontend -p 3000`                       |
+| 5️⃣ Sign in & Run session | via browser UI                                           |
 
 ---
 

@@ -1,0 +1,152 @@
+# Default values for cliscale-chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# -- Global settings
+namespace: "ws-cli"
+domain: "cliscale.example.com"
+wsDomain: "ws.cliscale.example.com"
+
+db:
+  maxConnections: 20
+  idleTimeoutMillis: 30000
+
+# -- Controller specific configuration
+controller:
+  replicaCount: 2
+  image:
+    repository: ""
+    pullPolicy: IfNotPresent
+    # -- Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+  runnerImage: ""
+  serviceAccount:
+    # -- Specifies whether a service account should be created
+    create: true
+    # -- Annotations to add to the service account
+    annotations: {}
+    # -- The name of the service account to use.
+    # If not set and create is true, a name is generated using the fullname template
+    name: "ws-cli-controller"
+    gcpServiceAccount: ""
+  pdb:
+    minAvailable: 1
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    cpuAverageUtilization: 80
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  env:
+    jobTtlSeconds: "300"
+    jobActiveDeadlineSeconds: "3600"
+    allowedOrigins: "https://yourdomain.com,https://app.yourdomain.com"
+    allowedCodeDomains: "github.com,gitlab.com,*.github.com"
+    nodeEnv: "production"
+  # -- Secret names for existing secrets
+  secrets:
+    databaseUrl: "pg"
+    jwt: "jwt"
+  tls:
+    secretName: ""
+
+# -- Gateway specific configuration
+gateway:
+  replicaCount: 3
+  image:
+    repository: ""
+    pullPolicy: IfNotPresent
+    # -- Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+  pdb:
+    minAvailable: 2
+  serviceAccount:
+    gcpServiceAccount: ""
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    cpuAverageUtilization: 80
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"
+  env:
+    logLevel: "info"
+  backendConfig:
+    enabled: true
+    timeoutSec: 3600
+    drainingTimeoutSec: 60
+  # -- Secret names for existing secrets
+  secrets:
+    databaseUrl: "pg"
+  tls:
+    secretName: ""
+
+# -- CloudSQL Proxy sidecar configuration (shared between controller and gateway)
+cloudsql:
+  enabled: true
+  image: "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.0"
+  # -- The connection name of the Cloud SQL instance. This should be populated by Terraform.
+  instanceConnectionName: ""
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# -- RBAC configuration
+rbac:
+  # -- Specifies whether RBAC resources should be created
+  create: true
+
+# -- Optional resources
+resourceQuota:
+  enabled: true
+  pods: "100"
+  requestsCpu: "50"
+  limitsCpu: "100"
+  requestsMemory: "50Gi"
+  limitsMemory: "100Gi"
+
+limitRange:
+  enabled: true
+  # -- Default pod limits
+  pod:
+    max:
+      cpu: "2"
+      memory: "2Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+    default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+  # -- Default container limits
+  container:
+    max:
+      cpu: "2"
+      memory: "2Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+    default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"

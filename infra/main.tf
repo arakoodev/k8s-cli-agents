@@ -125,6 +125,12 @@ resource "google_service_account" "controller" {
   display_name = "ws-cli-controller"
 }
 
+resource "google_service_account" "gateway" {
+  project      = var.project_id
+  account_id   = "ws-cli-gateway"
+  display_name = "ws-cli-gateway"
+}
+
 resource "google_project_iam_member" "controller_k8s_job_creator" {
   project = var.project_id
   role    = "roles/container.developer" # More granular role is better
@@ -137,10 +143,55 @@ resource "google_project_iam_member" "controller_firebase_auth" {
   member  = "serviceAccount:${google_service_account.controller.email}"
 }
 
-resource "google_iam_policy_binding" "controller_workload_identity" {
-  project = var.project_id
-  role    = "roles/iam.workloadIdentityUser"
+resource "google_service_account_iam_binding" "controller_workload_identity" {
+  service_account_id = google_service_account.controller.name
+  role               = "roles/iam.workloadIdentityUser"
   members = [
     "serviceAccount:${var.project_id}.svc.id.goog[ws-cli/ws-cli-controller]",
   ]
+}
+
+resource "google_service_account_iam_binding" "gateway_workload_identity" {
+  service_account_id = google_service_account.gateway.name
+  role               = "roles/iam.workloadIdentityUser"
+  members = [
+    "serviceAccount:${var.project_id}.svc.id.goog[ws-cli/ws-cli-gateway]",
+  ]
+}
+
+resource "helm_release" "cliscale" {
+  name       = "cliscale"
+  chart      = "../cliscale-chart"
+  namespace  = "ws-cli"
+
+  values = [
+    yamlencode({
+      controller = {
+        image = {
+          repository = "${google_artifact_registry_repository.main.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.main.repository_id}/controller"
+          tag        = var.controller_image_tag
+        }
+        runnerImage = "${google_artifact_registry_repository.main.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.main.repository_id}/runner:${var.runner_image_tag}"
+        serviceAccount = {
+          gcpServiceAccount = google_service_account.controller.email
+        }
+      }
+      gateway = {
+        image = {
+          repository = "${google_artifact_registry_repository.main.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.main.repository_id}/gateway"
+          tag        = var.gateway_image_tag
+        }
+        serviceAccount = {
+          gcpServiceAccount = google_service_account.gateway.email
+        }
+      }
+      cloudsql = {
+        instanceConnectionName = google_sql_database_instance.main.connection_name
+      }
+      domain   = var.domain
+      wsDomain = var.ws_domain
+    })
+  ]
+
+  depends_on = [google_container_cluster.primary]
 }

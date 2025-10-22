@@ -1,0 +1,35 @@
+{{- if .Values.limitRange.enabled }}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ include "cliscale.fullname" . }}-limits
+  namespace: {{ .Values.namespace }}
+spec:
+  limits:
+  - type: Pod
+    max:
+      cpu: "{{ .Values.limitRange.pod.max.cpu }}"
+      memory: "{{ .Values.limitRange.pod.max.memory }}"
+    min:
+      cpu: "{{ .Values.limitRange.pod.min.cpu }}"
+      memory: "{{ .Values.limitRange.pod.min.memory }}"
+    default:
+      cpu: "{{ .Values.limitRange.pod.default.cpu }}"
+      memory: "{{ .Values.limitRange.pod.default.memory }}"
+    defaultRequest:
+      cpu: "{{ .Values.limitRange.pod.defaultRequest.cpu }}"
+      memory: "{{ .Values.limitRange.pod.defaultRequest.memory }}"
+  - type: Container
+    max:
+      cpu: "{{ .Values.limitRange.container.max.cpu }}"
+      memory: "{{ .Values.limitRange.container.max.memory }}"
+    min:
+      cpu: "{{ .Values.limitRange.container.min.cpu }}"
+      memory: "{{ .Values.limitRange.container.min.memory }}"
+    default:
+      cpu: "{{ .Values.limitRange.container.default.cpu }}"
+      memory: "{{ .Values.limitRange.container.default.memory }}"
+    defaultRequest:
+      cpu: "{{ .Values.limitRange.container.defaultRequest.cpu }}"
+      memory: "{{ .Values.limitRange.container.defaultRequest.memory }}"
+{{- end }}

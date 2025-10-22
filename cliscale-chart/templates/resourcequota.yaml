@@ -1,0 +1,17 @@
+{{- if .Values.resourceQuota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "cliscale.fullname" . }}-quota
+  namespace: {{ .Values.namespace }}
+spec:
+  hard:
+    pods: "{{ .Values.resourceQuota.pods }}"
+    requests.cpu: "{{ .Values.resourceQuota.requestsCpu }}"
+    limits.cpu: "{{ .Values.resourceQuota.limitsCpu }}"
+    requests.memory: "{{ .Values.resourceQuota.requestsMemory }}"
+    limits.memory: "{{ .Values.resourceQuota.limitsMemory }}"
+    persistentvolumeclaims: "10"
+    requests.storage: "100Gi"
+    count/jobs.batch: "100"
+{{- end }}

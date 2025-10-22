@@ -105,36 +105,70 @@
   * **Session Auth**: controller mints **RS256** JWT (10-min, one-time via JTI) and exposes **`/.well-known/jwks.json`**.
   * Gateway verifies JWT → DB lookup `{sessionId→podIP}` → WS proxy to runner.
 
-* **Deploy**
+*   **Deploy**
 
-  * `cloudbuild.yaml` — Builds/pushes `runner`, `controller`, `ws-gateway`; applies K8s with `envsubst`.
-  * `k8s/` — Namespace, RBAC, Deployments, Services, Ingress (GCLB), BackendConfig, NetworkPolicies.
 
-* **End-to-End Demo**
+
+  * `cloudbuild.yaml` — Builds/pushes `runner`, `controller`, `ws-gateway`.
+
+  * `infra/*.tf` — Deploys the entire stack, including the Helm chart.
+
+  * `cliscale-chart/` — Helm chart containing all Kubernetes manifests.
+
+
+
+*   **End-to-End Demo**
+
+
 
   * `frontend/index.html` — Paste Firebase config; set controller (https) and gateway (wss) URLs; run a session and watch the terminal stream.
 
-* **CLI UX**
+
+
+*   **CLI UX**
+
+
 
   * `sample-cli/` — Stage-wise renderer; calls `claude` CLI if present, else **Anthropic SDK** via `ANTHROPIC_API_KEY`.
 
+
+
 ---
+
+
 
 ## 6) Source Files Worth Knowing
 
+
+
 | Path                           | Why it matters                                                                                                |
+
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `infra/*.tf`                   | **Private VPC**, **private GKE Autopilot**, **private Cloud SQL**, Artifact Registry                                  |
+
+| `infra/*.tf`                   | **Private VPC**, **private GKE Autopilot**, **private Cloud SQL**, Artifact Registry, and **Helm deployment**     |
+
 | `db/schema.sql`                | UNLOGGED `sessions` + `token_jti`, indexes, expiry triggers                                                   |
-| `k8s/controller.yaml`          | Controller + Cloud SQL Proxy sidecar; service; env wiring                                                     |
-| `k8s/gateway.yaml`             | WS Gateway + Cloud SQL Proxy sidecar; Ingress + BackendConfig                                                 |
-| `k8s/networkpolicy.yaml`       | Default-deny runner; allow gateway→runner ingress on `:7681`                                                  |
+
+| `cliscale-chart/templates/controller.yaml` | Controller Deployment, Service, Ingress, and Cloud SQL Proxy sidecar configuration.                   |
+
+| `cliscale-chart/templates/gateway.yaml`  | WS Gateway Deployment, Service, Ingress, and BackendConfig.                                           |
+
+| `cliscale-chart/values.yaml`     | Default configuration for the Helm chart.                                                                     |
+
+| `cliscale-chart/templates/networkpolicy.yaml` | Default-deny runner; allow gateway→runner ingress on `:7681`                                                  |
+
 | `controller/src/server.ts`     | Firebase verify → Job create → Postgres writes → mint RS256 session-JWT → respond `{sessionId, wsUrl, token}` |
+
 | `controller/src/sessionJwt.ts` | **RS256 signer** (from secret) + **JWKS endpoint** (swap to KMS here)                                         |
+
 | `ws-gateway/src/server.ts`     | WS upgrade handler, **JWT verify via JWKS**, `{sessionId→podIP}` DB lookup, JTI replay check, proxy to runner   |
+
 | `runner/entrypoint.sh`         | Fetch/verify bundle, install, launch **ttyd** with your CLI command                                           |
+
 | `sample-cli/src/index.ts`      | Stage-wise progress UX mirroring the video                                                                    |
+
 | `sample-cli/src/lib/claude.ts` | `claude` CLI shell-out + Anthropic SDK fallback                                                               |
+
 | `frontend/index.html`          | Firebase Web SDK + **xterm.js** terminal; end-to-end live stream                                              |
 
 ---
