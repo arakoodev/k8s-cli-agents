@@ -1,0 +1,56 @@
+# Skaffold ignore patterns - these files won't be watched or included in builds
+
+# Node modules
+**/node_modules/**
+**/package-lock.json
+
+# Build outputs
+**/dist/**
+**/build/**
+**/.next/**
+
+# Terraform
+infra/.terraform/**
+infra/.terraform.lock.hcl
+infra/terraform.tfstate*
+**/*.tfvars
+
+# Environment and secrets
+**/.env
+**/.env.*
+**/secrets/**
+**/*.pem
+**/*.key
+**/*.crt
+
+# IDE
+**/.idea/**
+**/.vscode/**
+**/*.swp
+**/*.swo
+
+# Git
+.git/**
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Frontend static files (not part of container builds)
+frontend/**
+
+# Sample CLI
+sample-cli/**
+
+# Database
+db/**
+
+# Helm values (handled separately)
+**/values*.yaml
+!**/values.yaml
+
+# Temporary files
+**/*.log
+**/*.tmp
+**/tmp/**

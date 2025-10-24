@@ -174,7 +174,14 @@ app.post('/api/sessions', sessionLimiter, requireFirebaseUser, asyncHandler(asyn
       activeDeadlineSeconds: jobActiveDeadlineSeconds,
       backoffLimit: 0,
       template: {
-        metadata: { labels: { app: 'ws-cli-runner', session: sessionId } },
+        metadata: {
+          labels: {
+            'app.kubernetes.io/name': 'cliscale-runner',
+            'app.kubernetes.io/component': 'runner',
+            'app.kubernetes.io/instance': sessionId,
+            'session': sessionId
+          }
+        },
         spec: {
           restartPolicy: 'Never',
           securityContext: {

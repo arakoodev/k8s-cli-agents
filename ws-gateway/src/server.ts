@@ -15,6 +15,8 @@ function getControllerUrl() {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  max: process.env.DB_MAX_CONNECTIONS ? parseInt(process.env.DB_MAX_CONNECTIONS) : 20,
+  idleTimeoutMillis: process.env.DB_IDLE_TIMEOUT_MILLIS ? parseInt(process.env.DB_IDLE_TIMEOUT_MILLIS) : 30000,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false
 });
 
