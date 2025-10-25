@@ -2,7 +2,7 @@ import http from 'http';
 import httpProxy from 'http-proxy';
 import pino from 'pino';
 import pg from 'pg';
-import { verifySessionJWT } from './sessionJwt';
+import { verifySessionJWT } from './sessionJwt.js';
 
 const { Pool } = pg;
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -88,6 +88,9 @@ app.on('upgrade', async (req, socket, head) => {
   }
 });
 
-if (require.main === module) {
+// Only start the server if this is the main module
+// In ES modules, check if import.meta.url matches the main script
+const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isMainModule) {
   app.listen(port, () => log.info({ port }, 'ws-gateway listening'));
 }

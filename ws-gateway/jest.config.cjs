@@ -6,4 +6,7 @@ module.exports = {
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
   testTimeout: 10000,
   forceExit: true,
+  moduleNameMapper: {
+    '^(\\.{1,2}/.*)\\.js$': '$1',
+  },
 };
