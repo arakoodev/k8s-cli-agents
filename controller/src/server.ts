@@ -4,8 +4,6 @@ import pino from 'pino';
 import pinoHttp from 'pino-http';
 import * as k8s from '@kubernetes/client-node';
 import { v4 as uuidv4 } from 'uuid';
-import { initializeApp, applicationDefault } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
 import { createSessionJWT, getJWKS } from './sessionJwt.js';
 import { pool, checkDatabaseHealth, closeDatabasePool } from './db.js';
 import rateLimit from 'express-rate-limit';
@@ -46,29 +44,26 @@ app.use(pinoHttp({
   }
 }));
 
-initializeApp({ credential: applicationDefault() });
-
 const port = Number(process.env.PORT || 8080);
+const apiKey = process.env.API_KEY;
 const namespace = process.env.NAMESPACE || 'ws-cli';
 const runnerImage = process.env.RUNNER_IMAGE || 'REPLACEME';
 const jobTtlSeconds = Number(process.env.JOB_TTL_SECONDS || 300);
 const jobActiveDeadlineSeconds = Number(process.env.JOB_ACTIVE_DEADLINE_SECONDS || 3600);
 const sessionExpirySeconds = Number(process.env.SESSION_EXPIRY_SECONDS || 10 * 60);
 
-// Per-user session creation rate limit
+// Per-IP session creation rate limit
 const sessionLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 5, // 5 sessions per minute per user
+  max: 5, // 5 sessions per minute per IP
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    // Rate limit by user ID
-    const user = (req as any).user;
-    return user ? user.uid : req.ip;
+    // Rate limit by IP address
+    return req.ip || 'unknown';
   },
   handler: (req, res) => {
-    const user = (req as any).user;
-    log.warn({ userId: user?.uid, ip: req.ip }, 'Rate limit exceeded for session creation');
+    log.warn({ ip: req.ip }, 'Rate limit exceeded for session creation');
     res.status(429).json({
       error: 'Too many sessions created. Please wait before creating more.',
       retryAfter: 60
@@ -99,18 +94,29 @@ kc.loadFromDefault();
 const batch = kc.makeApiClient(k8s.BatchV1Api);
 const core = kc.makeApiClient(k8s.CoreV1Api);
 
-async function requireFirebaseUser(req:any,res:any,next:any){
-  try {
-    const authz = req.headers['authorization'] || '';
-    if (!authz.startsWith('Bearer ')) return res.status(401).json({ error:'missing bearer' });
-    const idToken = authz.slice(7);
-    const decoded = await getAuth().verifyIdToken(idToken, true);
-    (req as any).user = { uid: decoded.uid, email: decoded.email, claims: decoded };
-    next();
-  } catch (e:any) {
-    req.log?.warn({err:e}, 'firebase verify failed');
-    res.status(401).json({ error: 'unauthenticated' });
+// Simple API key authentication middleware
+function requireApiKey(req:any,res:any,next:any){
+  const authz = req.headers['authorization'] || '';
+  if (!authz.startsWith('Bearer ')) {
+    log.warn({ ip: req.ip }, 'Missing Bearer token');
+    return res.status(401).json({ error:'Missing Authorization header with Bearer token' });
   }
+
+  const token = authz.slice(7);
+
+  if (!apiKey) {
+    log.error('API_KEY environment variable not set');
+    return res.status(500).json({ error:'Server configuration error' });
+  }
+
+  if (token !== apiKey) {
+    log.warn({ ip: req.ip }, 'Invalid API key attempt');
+    return res.status(401).json({ error:'Invalid API key' });
+  }
+
+  // Set req.clientId for logging (using IP as identifier)
+  (req as any).clientId = req.ip || 'unknown';
+  next();
 }
 
 app.get('/healthz', async (req, res) => {
@@ -136,8 +142,8 @@ app.get('/.well-known/jwks.json', async (_req, res) => {
   res.json(jwks);
 });
 
-app.post('/api/sessions', sessionLimiter, requireFirebaseUser, asyncHandler(async (req,res)=>{
-  const user = (req as any).user;
+app.post('/api/sessions', sessionLimiter, requireApiKey, asyncHandler(async (req,res)=>{
+  const clientId = (req as any).clientId; // IP address
   const { code_url, code_checksum_sha256, command, prompt } = req.body || {};
 
   // Validate all inputs
@@ -225,7 +231,7 @@ app.post('/api/sessions', sessionLimiter, requireFirebaseUser, asyncHandler(asyn
   await batch.createNamespacedJob(namespace, job);
   await pool.query(
     'INSERT INTO sessions (session_id, owner_user_id, job_name, expires_at) VALUES ($1, $2, $3, $4)',
-    [sessionId, user.uid, jobName, sessionExpires]
+    [sessionId, clientId, jobName, sessionExpires]
   );
 
   // Improved pod polling with timeout
@@ -268,8 +274,9 @@ app.post('/api/sessions', sessionLimiter, requireFirebaseUser, asyncHandler(asyn
     });
   }
 
+  // Create short-lived RS256 JWT for WebSocket authentication
   const { jti, token } = await createSessionJWT({
-    sub: user.uid,
+    sub: clientId,
     sid: sessionId,
     aud: 'ws',
     expSec: sessionExpirySeconds
@@ -283,8 +290,8 @@ app.post('/api/sessions', sessionLimiter, requireFirebaseUser, asyncHandler(asyn
   res.json({ sessionId, wsUrl:`/ws/${sessionId}`, token });
 }));
 
-app.get('/api/sessions/:id', requireFirebaseUser, asyncHandler(async (req,res)=>{
-  const user = (req as any).user;
+app.get('/api/sessions/:id', requireApiKey, asyncHandler(async (req,res)=>{
+  const clientId = (req as any).clientId;
   const sessionId = req.params.id;
 
   // Validate session ID format
@@ -302,8 +309,8 @@ app.get('/api/sessions/:id', requireFirebaseUser, asyncHandler(async (req,res)=>
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  if (session.owner_user_id !== user.uid) {
-    log.warn({ sessionId, userId: user.uid, ownerId: session.owner_user_id }, 'Unauthorized session access attempt');
+  if (session.owner_user_id !== clientId) {
+    log.warn({ sessionId, clientId, ownerId: session.owner_user_id }, 'Unauthorized session access attempt');
     return res.status(403).json({ error: 'Forbidden' });
   }
 

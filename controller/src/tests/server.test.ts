@@ -6,6 +6,10 @@ import { pool } from '../db'; // This will be the mocked pool
 // We will import the real app later if needed, but this is often easier.
 let app: express.Application;
 
+// Set up API key for testing
+const TEST_API_KEY = 'test-api-key-12345';
+process.env.API_KEY = TEST_API_KEY;
+
 // Mocks need to be configured before imports
 const mockCreateNamespacedJob = jest.fn().mockResolvedValue({ body: {} });
 jest.mock('@kubernetes/client-node', () => ({
@@ -50,10 +54,33 @@ describe('Controller API', () => {
             command: 'npm test',
         };
 
+        it('should reject requests without Authorization header', async () => {
+            await request(app)
+                .post('/api/sessions')
+                .send(validSessionRequest)
+                .expect(401);
+        });
+
+        it('should reject requests with invalid API key', async () => {
+            await request(app)
+                .post('/api/sessions')
+                .set('Authorization', 'Bearer wrong-api-key')
+                .send(validSessionRequest)
+                .expect(401);
+        });
+
+        it('should reject requests with malformed Authorization header', async () => {
+            await request(app)
+                .post('/api/sessions')
+                .set('Authorization', 'Basic dGVzdDp0ZXN0')
+                .send(validSessionRequest)
+                .expect(401);
+        });
+
         it('should create a session and a K8s job with correct security contexts', async () => {
             const response = await request(app)
                 .post('/api/sessions')
-                .set('Authorization', 'Bearer fake-token')
+                .set('Authorization', `Bearer ${TEST_API_KEY}`)
                 .send(validSessionRequest)
                 .expect(200);
 
@@ -62,7 +89,7 @@ describe('Controller API', () => {
             expect(mockCreateNamespacedJob).toHaveBeenCalledTimes(1);
 
             const jobSpec = mockCreateNamespacedJob.mock.calls[0][1].spec;
-            
+
             // Test for Pod Security Standards
             const podSecurityContext = jobSpec.template.spec.securityContext;
             expect(podSecurityContext.runAsNonRoot).toBe(true);
@@ -78,27 +105,27 @@ describe('Controller API', () => {
         it('should reject requests with invalid code_url (SSRF attempt)', async () => {
             await request(app)
                 .post('/api/sessions')
-                .set('Authorization', 'Bearer fake-token')
+                .set('Authorization', `Bearer ${TEST_API_KEY}`)
                 .send({ ...validSessionRequest, code_url: 'http://169.254.169.254/metadata' })
                 .expect(400);
         });
-        
+
         it('should reject requests with invalid command (injection attempt)', async () => {
             await request(app)
                 .post('/api/sessions')
-                .set('Authorization', 'Bearer fake-token')
+                .set('Authorization', `Bearer ${TEST_API_KEY}`)
                 .send({ ...validSessionRequest, command: 'npm start; $(rm -rf /)' })
                 .expect(400);
         });
 
         it('should enforce rate limiting', async () => {
             const agent = request.agent(app);
-            
+
             // Exhaust the rate limit (5 requests)
             for (let i = 0; i < 5; i++) {
                 await agent
                     .post('/api/sessions')
-                    .set('Authorization', 'Bearer fake-token')
+                    .set('Authorization', `Bearer ${TEST_API_KEY}`)
                     .send(validSessionRequest)
                     .expect(200);
             }
@@ -106,7 +133,7 @@ describe('Controller API', () => {
             // The 6th request should be rejected
             await agent
                 .post('/api/sessions')
-                .set('Authorization', 'Bearer fake-token')
+                .set('Authorization', `Bearer ${TEST_API_KEY}`)
                 .send(validSessionRequest)
                 .expect(429);
         });

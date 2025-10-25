@@ -113,33 +113,6 @@ spec:
       protocol: TCP
   type: ClusterIP
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ include "cliscale.fullname" . }}-gateway
-  namespace: {{ .Values.namespace }}
-  annotations:
-    kubernetes.io/ingress.class: "gce"
-    {{- if .Values.gateway.backendConfig.enabled }}
-    cloud.google.com/backend-config: '{"default": "{{ include "cliscale.fullname" . }}-gateway-backendconfig"}'
-    {{- end }}
-spec:
-  tls:
-  - hosts:
-    - {{ .Values.wsDomain }}
-    secretName: {{ .Values.gateway.tls.secretName }}
-  rules:
-    - host: {{ .Values.wsDomain }}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "cliscale.fullname" . }}-gateway
-                port:
-                  number: 80
----
 {{- if .Values.gateway.backendConfig.enabled }}
 apiVersion: cloud.google.com/v1
 kind: BackendConfig

@@ -63,6 +63,11 @@ spec:
               secretKeyRef:
                 name: {{ .Values.controller.secrets.databaseUrl }}
                 key: DATABASE_URL
+          - name: API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: {{ include "cliscale.fullname" . }}-api-key
+                key: API_KEY
           - name: JWT_PRIVATE_KEY_PATH
             value: "/run/secrets/jwt/private.pem"
           - name: ALLOWED_ORIGINS
@@ -130,30 +135,6 @@ spec:
     port: 80
     targetPort: 8080
   type: ClusterIP
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ include "cliscale.fullname" . }}-controller
-  namespace: {{ .Values.namespace }}
-  annotations:
-    kubernetes.io/ingress.class: "gce"
-spec:
-  tls:
-  - hosts:
-    - {{ .Values.domain }}
-    secretName: {{ .Values.controller.tls.secretName }}
-  rules:
-  - host: {{ .Values.domain }}
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: {{ include "cliscale.fullname" . }}-controller
-            port:
-              number: 80
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

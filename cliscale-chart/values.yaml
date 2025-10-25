@@ -4,12 +4,31 @@
 
 # -- Global settings
 namespace: "ws-cli"
-domain: "cliscale.example.com"
-wsDomain: "ws.cliscale.example.com"
 
 db:
   maxConnections: 20
   idleTimeoutMillis: 30000
+
+# -- API key for authentication (set via secret)
+# Leave empty to require manual secret creation
+apiKey: ""
+
+# -- Ingress configuration
+# Creates a single GCE load balancer that routes by path:
+#   - /api/* → controller (HTTP REST API)
+#   - /ws/* → gateway (serves xterm.js HTML + handles WebSocket connections)
+#   - /.well-known/* → controller (JWKS endpoint)
+# Access via load balancer IP (no domain required!)
+# Example: http://34.120.45.67/api/sessions
+ingress:
+  enabled: true
+  # Optional: Set a hostname if you want to use a domain (not required!)
+  # Leave empty to use IP address only
+  hostname: ""
+  tls:
+    # Only enable if you have a domain and TLS certificate
+    enabled: false
+    secretName: ""
 
 # -- Controller specific configuration
 controller:
@@ -46,15 +65,13 @@ controller:
   env:
     jobTtlSeconds: "300"
     jobActiveDeadlineSeconds: "3600"
-    allowedOrigins: "https://yourdomain.com,https://app.yourdomain.com"
+    allowedOrigins: "*"
     allowedCodeDomains: "github.com,gitlab.com,*.github.com"
     nodeEnv: "production"
   # -- Secret names for existing secrets
   secrets:
     databaseUrl: "pg"
     jwt: "jwt"
-  tls:
-    secretName: ""
 
 # -- Gateway specific configuration
 gateway:
@@ -89,8 +106,6 @@ gateway:
   # -- Secret names for existing secrets
   secrets:
     databaseUrl: "pg"
-  tls:
-    secretName: ""
 
 # -- CloudSQL Proxy sidecar configuration (shared between controller and gateway)
 cloudsql:

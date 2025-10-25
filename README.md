@@ -1,367 +1,307 @@
-# **Full Agent Stack — Cloud SQL (PostgreSQL) + WS Gateway + Firebase Auth Demo**
+# **CLI Scale — Ephemeral CLI Agents on Kubernetes**
 
-> A fully self-contained architecture for securely running **ephemeral CLI agents** on Kubernetes with authenticated WebSocket streaming, PostgreSQL session state, and Firebase user login.
-> Built to feel like **App Engine for AI jobs** — you upload code, it builds via Cloud Build, deploys to GKE, and runs isolated sessions on demand.
+> Run short-lived CLI jobs on Kubernetes with WebSocket streaming, PostgreSQL session management, and API key authentication.
+> Access everything via a single load balancer IP address - no domain required!
+
+## 🎯 Quick Start
+
+**Get your load balancer IP and start using it:**
+
+```bash
+# 1. Get load balancer IP (after deployment)
+export LB_IP=$(kubectl get ingress cliscale-ingress -n ws-cli -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+export API_KEY=$(kubectl get secret cliscale-api-key -n ws-cli -o jsonpath='{.data.API_KEY}' | base64 -d)
+
+# 2. Create a session
+curl -X POST "http://$LB_IP/api/sessions" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"code_url": "https://github.com/user/repo/tree/main/folder", "command": "npm start"}'
+
+# 3. Open the terminal in your browser
+# http://YOUR_LB_IP/ws/{sessionId}?token={jwt}
+```
+
+**That's it!** No DNS, no domains, no TLS required for testing.
 
 ---
 
 ## 🚀 Overview
 
-This stack enables **user-authenticated, on-demand compute sessions** that run short-lived CLIs (e.g., LLM agents, data pipelines, RL environments) inside ephemeral Kubernetes Jobs.
-Each user session:
+This stack runs **ephemeral CLI agents** inside Kubernetes Jobs with:
+- **API Key Authentication**: Simple Bearer token auth
+- **WebSocket Streaming**: Live terminal output via xterm.js
+- **Session Management**: PostgreSQL tracks sessions and prevents JWT replay
+- **One Load Balancer**: Single IP address handles all traffic
 
-1. Authenticates via **Firebase Auth** (Google or email/password).
-2. Calls `POST /api/sessions` on the **controller**, which:
+### How It Works
 
-   * Verifies Firebase ID token.
-   * Spawns a **Kubernetes Job** for that user.
-   * Stores `{sessionId → podIP}` in **PostgreSQL (Cloud SQL)**.
-   * Mints a short-lived **RS256 session-JWT**.
-3. The browser opens a WebSocket to the **WS Gateway**, passing that JWT.
-
-   * The gateway verifies JWT → looks up podIP in Postgres → proxies WS traffic to the runner.
-4. The **runner** downloads a CLI bundle (zip/tgz/git), verifies checksum, installs dependencies, and streams output through **ttyd**.
-5. The **frontend** (Firebase Auth + xterm.js) shows the live CLI stream in-browser.
+1. **Create Session**: Call `POST http://LB_IP/api/sessions` with API key
+2. **Spawn Job**: Controller creates a Kubernetes Job to run your code
+3. **Get URL**: Response includes `sessionId` and `sessionJWT`
+4. **Open Terminal**: Navigate to `http://LB_IP/ws/{sessionId}?token={jwt}`
+5. **Stream Output**: xterm.js automatically connects and streams live output
 
 ---
 
-## 🧩 Architecture Diagram
+## 🧩 Architecture
 
-```mermaid
-flowchart LR
-  subgraph Client["Frontend (Browser)"]
-    A1["Firebase Auth (ID Token)"]
-    A2["xterm.js Terminal"]
-  end
-  subgraph GKE["GKE Autopilot Cluster (Private VPC)"]
-    C1["Controller API"]
-    G1["WS Gateway"]
-    R1["Ephemeral Runner Pod (ttyd)"]
-    DB["Cloud SQL Proxy Sidecar"]
-  end
-  SQL["Cloud SQL (PostgreSQL)"]
-  FA["Firebase Project"]
-
-  A1 -->|"ID Token"| C1
-  C1 -->|"spawn Job"| R1
-  C1 -->|"insert session → podIP"| SQL
-  C1 -->|"mint JWT"| A2
-  A2 -->|"JWT via WebSocket"| G1
-  G1 -->|"lookup podIP"| SQL
-  G1 -->|"WS proxy"| R1
-  DB --> SQL
 ```
+                    http://YOUR_LB_IP
+                           │
+              ┌────────────┴────────────┐
+              │  GCE Load Balancer      │
+              │  (Path-based routing)   │
+              └────────────┬────────────┘
+                           │
+        ┌──────────────────┼──────────────────┐
+        │                  │                  │
+   /api/* routes      /ws/* routes    /.well-known/*
+        │                  │                  │
+        ▼                  ▼                  │
+  ┌──────────┐      ┌──────────┐            │
+  │Controller│      │ Gateway  │◄───────────┘
+  │ - Auth   │      │- xterm.js│
+  │ - Jobs   │      │- WS Proxy│
+  └─────┬────┘      └─────┬────┘
+        │                  │
+        └────────┬─────────┘
+                 ▼
+        ┌──────────────────┐
+        │  PostgreSQL      │
+        │  - Sessions      │
+        │  - JTIs          │
+        └──────────────────┘
+```
+
+### Path-Based Routing
+
+The load balancer routes by URL path:
+
+| Request | Backend |
+|---------|---------|
+| `POST /api/sessions` | Controller (creates session) |
+| `GET /api/sessions/{id}` | Controller (get session info) |
+| `GET /.well-known/jwks.json` | Controller (JWT verification) |
+| `GET /ws/{sessionId}?token={jwt}` | Gateway (serves xterm.js HTML) |
+| `WS /ws/{sessionId}` | Gateway (WebSocket proxy to runner) |
 
 ---
 
 ## ⚙️ Components
 
-### **1. Controller**
+### 1. Controller
+- Validates API key from `Authorization: Bearer {key}`
+- Creates Kubernetes Jobs (one per session)
+- Mints short-lived RS256 session JWTs with one-time JTI
+- Exposes JWKS endpoint for JWT verification
+- Rate limiting: 5 requests/min per IP
 
-* Express API verifying Firebase ID tokens.
-* Creates Kubernetes Jobs (one per session).
-* Inserts session metadata and **one-time JTI** into PostgreSQL.
-* Mints **RS256 JWTs** signed by a private key from a K8s secret.
-* Exposes a public **`/.well-known/jwks.json`** endpoint for token verification.
+### 2. Gateway
+- Serves self-hosted xterm.js terminal at `/ws/{sessionId}?token={jwt}`
+- Verifies session JWTs via controller's JWKS endpoint
+- Prevents JWT replay by consuming one-time JTI
+- Proxies WebSocket traffic to runner pods
+- Scales horizontally (stateless)
 
-### **2. WebSocket Gateway**
+### 3. Runner
+- Downloads code from URL (supports GitHub tree URLs like `github.com/user/repo/tree/main/folder`)
+- Installs dependencies
+- Runs command in isolated Kubernetes Job
+- Streams output via ttyd on port 7681
+- Auto-cleanup with TTL
 
-* Stateless Node.js proxy layer.
-* Verifies session JWTs against the controller's public **JWKS endpoint**.
-* **Prevents JTI replay attacks** by checking/deleting the JTI in Postgres.
-* Fetches podIP from Postgres.
-* Streams WS traffic (client ⇄ runner).
-* Scales horizontally; use GCLB ingress.
-
-### **3. Runner**
-
-* Minimal Node + bash + ttyd image.
-* Pulls bundle from `CODE_URL` (zip/tgz/git).
-* Verifies optional SHA-256.
-* Runs inside isolated Job; TTL cleans up after finish.
-* Streams output through ttyd at `:7681`.
-
-### **4. Database (PostgreSQL on Cloud SQL)**
-
-* **`sessions`** (UNLOGGED): `session_id`, `owner_user_id`, `job_name`, `pod_ip`, `expires_at`.
-* **`token_jti`** (UNLOGGED): prevents JWT reuse (one-time tokens).
-* Trigger `prune_expired_rows()` cleans out expired sessions/JTIs automatically.
-
-### **5. Frontend (Firebase Auth + xterm.js)**
-
-* Sign in with Google or email/password.
-* Calls `/api/sessions` with ID token.
-* Connects WS to gateway with protocol `bearer,<sessionJWT>`.
-* Streams live job output in terminal.
-
-### **6. Cloud Build**
-
-* `cloudbuild.yaml` builds all three images (controller, gateway, runner) directly from source.
-* Pushes to Artifact Registry, then applies K8s manifests via `envsubst`.
-* Short TTL + cleanup policies keep repo slim.
+### 4. PostgreSQL (Cloud SQL)
+- Stores session metadata (`sessionId` → `podIP` mapping)
+- Tracks one-time JTIs to prevent JWT replay
+- Auto-prunes expired sessions
 
 ---
 
-## 🧱 Infrastructure (Terraform)
+## ☸️ Deployment
 
-Directory: `infra/`
-
-Creates a secure, private foundation for the application:
-
-* **Dedicated VPC** (`ws-cli-vpc`) with a subnet for GKE.
-* **Private GKE Autopilot cluster** with no public control plane endpoint.
-* **Private Cloud SQL (Postgres 15)** instance accessible only from within the VPC.
-* **Artifact Registry** repo with a 7-day cleanup policy for untagged images.
-* Enables required GCP APIs.
-
-Example use:
+### Prerequisites
 
 ```bash
-cd infra
-terraform init
-terraform apply \
-  -var="project_id=YOUR_PROJECT" \
-  -var="region=us-central1" \
-  -var="db_user=appuser" \
-  -var="db_password=STRONG_PASSWORD"
-```
+# Install tools
+brew install skaffold  # or: curl -Lo skaffold https://storage.googleapis.com/skaffold/releases/latest/skaffold-darwin-amd64
+gcloud components install kubectl
 
-Outputs:
-
-* `instance_connection_name` for the Cloud SQL proxy.
-* `db_user` and `db_name` for configuring the application.
-
-Connect to the private database instance using the Cloud SQL Auth Proxy:
-
-```bash
-# First, get the connection name from terraform output
-export INSTANCE_CONNECTION_NAME=$(terraform -chdir=infra output -raw instance_connection_name)
-
-# In a separate terminal, start the proxy
-gcloud sql connect ws-cli-pg --instance-connection-name=$INSTANCE_CONNECTION_NAME
-
-# Now you can connect using psql
-psql "host=127.0.0.1 port=5432 sslmode=disable dbname=wscli user=appuser"
-> \i ../db/schema.sql
-```
-
----
-
-## ☸️ Deployment (Skaffold + Helm)
-
-The application uses **Skaffold** for App Engine-like deployment from your desktop or CI/CD pipeline. Skaffold builds Docker images via Cloud Build, then deploys using Helm.
-
-### Quick Deploy (Desktop → GKE)
-
-**Prerequisites:**
-- Install [Skaffold](https://skaffold.dev/docs/install/)
-- Install [gcloud](https://cloud.google.com/sdk/docs/install)
-- Run Terraform to create infrastructure (see below)
-- Create Kubernetes secrets (see DEPLOYMENT.md)
-
-**One-Command Deployment:**
-
-```bash
-# Set your configuration
+# Set up GCP project
 export PROJECT_ID="your-project-id"
-export DOMAIN="cliscale.yourdomain.com"
-export WS_DOMAIN="ws.yourdomain.com"
+gcloud config set project $PROJECT_ID
+```
 
-# Build and deploy everything!
+### One-Command Deployment
+
+```bash
+# Deploy everything (builds images via Cloud Build, deploys via Helm)
 skaffold run \
   --default-repo=us-central1-docker.pkg.dev/$PROJECT_ID/apps \
-  --profile=staging \
-  --set-value domain=$DOMAIN \
-  --set-value wsDomain=$WS_DOMAIN
+  --profile=staging
 ```
 
 **What this does:**
 1. Builds controller, gateway, and runner Docker images
 2. Pushes to Artifact Registry via Cloud Build
-3. Deploys via Helm with automatic image tags
-4. Waits for rollout completion
-5. ✅ Your app is live!
+3. Deploys via Helm
+4. Creates a GCE load balancer
+5. ✅ Ready to use!
 
-### Development Mode (Live Reload)
-
-```bash
-skaffold dev --port-forward
-```
-
-This watches for code changes, rebuilds, and redeploys automatically!
-
-### Infrastructure Setup (One-Time)
-
-Before deploying the application, provision GCP infrastructure with Terraform:
+### Get Your Load Balancer IP
 
 ```bash
-cd infra
-terraform init
-terraform apply \
-  -var="project_id=YOUR_PROJECT" \
-  -var="region=us-central1" \
-  -var="db_user=appuser" \
-  -var="db_password=STRONG_PASSWORD" \
-  -var="domain=cliscale.yourdomain.com" \
-  -var="ws_domain=ws.yourdomain.com" \
-  -var="controller_image_tag=latest" \
-  -var="gateway_image_tag=latest" \
-  -var="runner_image_tag=latest"
+# Wait for load balancer to provision (5-10 minutes)
+kubectl get ingress cliscale-ingress -n ws-cli -w
+
+# Once ADDRESS appears, export it
+export LB_IP=$(kubectl get ingress cliscale-ingress -n ws-cli -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+echo "Load Balancer IP: $LB_IP"
 ```
 
-This creates:
-- VPC with private GKE cluster
-- Cloud SQL PostgreSQL instance
-- Artifact Registry
-- Service accounts with workload identity
+### Get Your API Key
 
-### Detailed Deployment Guide
-
-See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for:
-- Complete setup instructions
-- Creating Kubernetes secrets
-- TLS certificate setup with cert-manager
-- Environment profiles (dev/staging/production)
-- Troubleshooting guide
-- Cloud Build CI/CD setup
-
-### Security & Code Review
-
-The migration has been **fully reviewed and verified**:
-- ✅ All critical security issues resolved (100% of CRITICAL issues fixed)
-- ✅ Code reviewed: health checks, security contexts, network policies verified
-- ✅ 24 of 29 total issues resolved (83% complete)
-- ✅ **APPROVED for staging deployment**
-
-See **[HELM_PLAN.md](./HELM_PLAN.md)** for complete security review
-See **[CODE_REVIEW_FINDINGS.md](./CODE_REVIEW_FINDINGS.md)** for implementation verification
-
----
-
-## 🧪 Local Testing (Firebase Auth + WebSocket)
-
-1. Open `frontend/index.html`.
-   Replace placeholders with your Firebase config:
-
-   ```js
-   const firebaseConfig = {
-     apiKey: "AIza...",
-     authDomain: "yourapp.firebaseapp.com",
-     projectId: "yourapp",
-     appId: "1:123456789:web:abcdef"
-   };
-   ```
-2. Start a static server:
-
-   ```bash
-   npx http-server frontend -p 3000
-   ```
-3. Sign in → fill `controller` (https) and `gateway` (wss) URLs with the domains you configured in Terraform.
-4. Provide:
-
-   * `code_url`:  a zip or Git repo
-   * `command`:   what to run (e.g., `npm run build && node dist/index.js run`)
-   * `prompt`:    text prompt to send to Claude
-5. Click **Run Session** → watch live terminal stream.
-
----
-
-## 🔒 Security Model
-
-| Layer             | Mechanism                                                    | Purpose                                    |
-| ----------------- | ------------------------------------------------------------ | ------------------------------------------ |
-| User → Controller | Firebase ID token                                            | Authenticates human identity               |
-| Controller → User | Short-lived **RS256 Session JWT** w/ **one-time JTI**        | Grants single-session access               |
-| Gateway           | **JWT verify via JWKS** + **JTI replay prevention** (Postgres) | Authorizes WS upgrade and prevents reuse   |
-| Runner            | TTL Job + NetworkPolicy                                      | Hard isolation per user                    |
-| DB                | **Private IP** + Expiry trigger + unlogged tables            | Secure, fast writes, and auto-cleanup      |
-
-### Additional Hardening (Recommended)
-
-* Replace local PEMs with **Cloud KMS-backed** keys for signing.
-* Implement **VPC-SC** restrictions for an extra security boundary.
-* Use **Cloud Armor** to rate-limit `/api/sessions` and protect from DDoS.
-* Add robust bundle validation (domain allowlists, size limits, static analysis).
-
----
-
-## 📈 Scalability Notes
-
-* Gateway pods handle ~30–60 KB/socket → ~1 M idle sockets ≈ 40–60 GB across 40–80 pods.
-* BackendConfig: `timeoutSec: 3600–7200`, enable pings.
-* Job TTL: 5–10 min typical; reclaim resources fast.
-* Horizontal Pod Autoscaler or KEDA on custom metric `open_ws_connections`.
-* Cloud SQL connection pool per pod (e.g., `max=5`) avoids exhaustion.
-
----
-
-## 🧠 Observability
-
-Add (GCP managed Prometheus + Cloud Logging):
-
-* Controller API latency.
-* Job spin-up time.
-* Active sessions / WS connections.
-* Runner job CPU, memory, duration.
-
-Use OpenTelemetry SDKs to emit traces to GCP Trace for end-to-end session profiling.
-
----
-
-## 🪄 Developer Experience
-
-### Build/Deploy Workflow
-
-* **No local Docker required** — Cloud Build uploads code, builds, and deploys.
-* **Short-lived Artifact Registry**: images expire automatically after 7 days.
-* **Ephemeral CLI**: runner downloads from URL; you can swap versions instantly.
-
-### Sample CLI
-
-The bundled `sample-cli/` shows:
-
-* Stage-wise progress bars with `listr2` + `ora`.
-* Claude API integration (`@anthropic-ai/sdk`).
-* Works inside runner via ttyd or local Node.
-
----
-
-## 🧰 Folder Structure
-
-```
-full-agent-stack-pg-sql/
-├── README.md
-├── infra/                  # Terraform (Cloud SQL + GKE + Helm Deployment)
-├── db/schema.sql           # Sessions + JTIs + expiry triggers
-├── cliscale-chart/         # Helm chart for the application
-├── controller/             # Express API + Firebase verify + JWT mint + JWKS
-├── ws-gateway/             # Stateless WS proxy + JWT verify
-├── runner/                 # Entry script + Dockerfile (downloads bundle)
-├── sample-cli/             # Stage-wise CLI sample (listr2 + ora)
-└── frontend/               # Firebase Auth + xterm.js demo UI
+```bash
+export API_KEY=$(kubectl get secret cliscale-api-key -n ws-cli -o jsonpath='{.data.API_KEY}' | base64 -d)
+echo "API Key: $API_KEY"
 ```
 
 ---
 
-## ✅ Quickstart Recap
+## 🧪 Testing
 
-| Step                      | Command                                                  |
-| ------------------------- | -------------------------------------------------------- |
-| 1️⃣ Deploy Infrastructure | `cd infra && terraform apply` (see above)                |
-| 2️⃣ Init DB schema        | `gcloud sql connect ws-cli-pg` then `\i db/schema.sql`  |
-| 3️⃣ Create K8s secrets    | See DEPLOYMENT.md for detailed instructions              |
-| 4️⃣ Deploy Application    | `skaffold run --default-repo=...` (see above)            |
-| 5️⃣ Run frontend          | `npx http-server frontend -p 3000`                       |
-| 6️⃣ Sign in & Run session | via browser UI                                           |
+### Create a Session
 
-**For quick updates:** Just run `skaffold run` again!
+```bash
+curl -X POST "http://$LB_IP/api/sessions" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code_url": "https://github.com/arakoodev/cliscale/tree/main/sample-cli",
+    "command": "node index.js run",
+    "prompt": "Hello!",
+    "install_cmd": "npm install"
+  }'
+```
+
+**Response:**
+```json
+{
+  "sessionId": "abc-123-def-456",
+  "sessionJWT": "eyJhbGc..."
+}
+```
+
+### Open Terminal
+
+Navigate to:
+```
+http://YOUR_LB_IP/ws/abc-123-def-456?token=eyJhbGc...
+```
+
+✅ Terminal loads automatically
+✅ Connects via WebSocket
+✅ Streams live output
+
+### Supported Code URLs
+
+- **GitHub tree**: `https://github.com/owner/repo/tree/branch/folder`
+- **Zip**: `https://example.com/code.zip`
+- **Tarball**: `https://example.com/code.tar.gz`
+- **Git repo**: `https://github.com/owner/repo.git`
 
 ---
 
-## 🧩 Future Extensions
+## 🔒 Security
 
-* **pg_cron** cleanup every 5 min to prune expired sessions/JTIs.
-* **Custom CA mTLS** between gateway↔runner for intra-cluster TLS.
-* **Multi-tenant billing** (store token usage or duration per session).
-* **OpenTelemetry** spans linking Firebase UID ↔ Job runtime.
+| Layer | Mechanism |
+|-------|-----------|
+| API Access | API key (Bearer token from K8s secret) |
+| Session Access | Short-lived RS256 JWT with one-time JTI |
+| Gateway | JWT verification + JTI replay prevention |
+| Runner | Isolated Job with NetworkPolicy + TTL cleanup |
+| Database | Private IP, unlogged tables, auto-expiry |
+| Rate Limiting | 5 req/min per IP for session creation |
 
+**Recommended Hardening:**
+- Use Cloud KMS for JWT signing keys
+- Enable VPC-SC for additional isolation
+- Add Cloud Armor for DDoS protection
+- Validate code URLs against allowlists
+
+---
+
+## ❓ FAQ
+
+### Q: Do I need a domain?
+**NO.** Use the load balancer IP directly: `http://34.120.45.67`
+
+### Q: Can I add a domain later?
+**YES.** Set DNS A record to LB IP, then:
+```bash
+skaffold run --set-value ingress.hostname=cliscale.yourdomain.com
+```
+
+### Q: Does WebSocket work over HTTP (not HTTPS)?
+**YES.** WebSocket works fine over HTTP. Use `ws://` protocol.
+
+### Q: How do I enable HTTPS?
+You need a domain first, then add cert-manager. See DEPLOYMENT.md.
+
+### Q: What's the difference between LB IP and CONTROLLER_URL?
+- **LB IP** (`http://34.120.45.67`): External access - YOU use this
+- **CONTROLLER_URL** (`http://cliscale-controller.ws-cli.svc.cluster.local`): Internal K8s DNS - pods use this
+
+### Q: How long do JWTs last?
+About 5 minutes. They're single-use (JTI is consumed on first WebSocket connection).
+
+### Q: Where is the xterm.js frontend?
+Embedded in the gateway. No separate deployment needed.
+
+---
+
+## 📂 Project Structure
+
+```
+cliscale/
+├── controller/           # API + job spawning
+├── ws-gateway/           # WebSocket proxy + xterm.js serving
+├── runner/               # Job container (downloads code, runs CLI)
+├── cliscale-chart/       # Helm chart
+├── skaffold.yaml         # Build & deploy config
+├── db/schema.sql         # PostgreSQL schema
+└── sample-cli/           # Example CLI to run
+```
+
+---
+
+## 🔧 Development
+
+```bash
+# Live reload during development
+skaffold dev --port-forward \
+  --default-repo=us-central1-docker.pkg.dev/$PROJECT_ID/apps \
+  --profile=dev
+```
+
+---
+
+## 📚 Documentation
+
+- **[DEPLOYMENT.md](./DEPLOYMENT.md)**: Detailed deployment guide
+- **[HELM_PLAN.md](./HELM_PLAN.md)**: Security review
+- **[CODE_REVIEW_FINDINGS.md](./CODE_REVIEW_FINDINGS.md)**: Implementation verification
+
+---
+
+## ✅ Quick Recap
+
+| Step | Command |
+|------|---------|
+| Deploy | `skaffold run --default-repo=...` |
+| Get IP | `kubectl get ingress cliscale-ingress -n ws-cli` |
+| Get API Key | `kubectl get secret cliscale-api-key -n ws-cli -o jsonpath='{.data.API_KEY}' \| base64 -d` |
+| Create Session | `curl -X POST http://$LB_IP/api/sessions -H "Authorization: Bearer $API_KEY" ...` |
+| Open Terminal | `http://$LB_IP/ws/{sessionId}?token={jwt}` |
+
+**No domain required. No TLS required. Just works.** 🎉

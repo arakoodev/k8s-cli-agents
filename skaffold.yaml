@@ -51,11 +51,11 @@ deploy:
         gateway.image.tag: "{{.IMAGE_TAG_gateway}}"
         controller.runnerImage: "{{.IMAGE_FULLY_QUALIFIED_runner}}"
 
-      # Override values from skaffold.yaml or command line
-      setValues:
-        # These should be overridden via --set or environment-specific values files
-        domain: "cliscale.example.com"
-        wsDomain: "ws.cliscale.example.com"
+      # Override values from skaffold.yaml or command line (optional)
+      # No values needed! The load balancer IP works out of the box.
+      # setValues:
+        # Optional: Set a hostname if you want to use a domain
+        # ingress.hostname: "cliscale.yourdomain.com"
 
       # You can also load values from files for different environments
       # valuesFiles:
