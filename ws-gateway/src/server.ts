@@ -88,9 +88,9 @@ app.on('upgrade', async (req, socket, head) => {
   }
 });
 
-// Only start the server if this is the main module
-// In ES modules, check if import.meta.url matches the main script
-const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
+// Only start the server if not in test mode
+// In production/development, NODE_ENV will be 'production' or undefined
+// In tests, NODE_ENV will be 'test'
+if (process.env.NODE_ENV !== 'test') {
   app.listen(port, () => log.info({ port }, 'ws-gateway listening'));
 }

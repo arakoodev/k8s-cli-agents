@@ -322,10 +322,10 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // Export the app for testing
 export { app };
 
-// Only start the server if this is the main module
-// In ES modules, check if import.meta.url matches the main script
-const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
+// Only start the server if not in test mode
+// In production/development, NODE_ENV will be 'production' or undefined
+// In tests, NODE_ENV will be 'test'
+if (process.env.NODE_ENV !== 'test') {
   const server = app.listen(port, ()=>log.info({port},'controller listening'));
 
   const gracefulShutdown = async (signal: string) => {
