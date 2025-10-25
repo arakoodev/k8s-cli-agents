@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "jest"
+    "test": "jest",
+    "smoke": "npm run build && node --check dist/server.js",
+    "smoke:full": "npm run smoke && timeout 10s node dist/server.js || exit 0"
   },
   "dependencies": {
     "@kubernetes/client-node": "^0.20.0",

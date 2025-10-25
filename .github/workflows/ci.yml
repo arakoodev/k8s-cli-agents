@@ -32,3 +32,56 @@ jobs:
     - name: Run Tests in ${{ matrix.service-dir }}
       run: npm test
       working-directory: ./${{ matrix.service-dir }}
+
+    - name: Build TypeScript
+      run: npm run build
+      working-directory: ./${{ matrix.service-dir }}
+
+    # Smoke tests - validate compiled JavaScript (same as production)
+    - name: Smoke Test - Validate JavaScript Syntax
+      run: |
+        echo "🔍 Validating compiled JavaScript syntax..."
+        node --check dist/server.js
+        echo "✅ JavaScript syntax is valid"
+      working-directory: ./${{ matrix.service-dir }}
+
+    - name: Smoke Test - Verify ES Module Imports
+      run: |
+        echo "🔍 Verifying ES module imports resolve correctly..."
+        node --input-type=module --eval "
+          import('./dist/server.js')
+            .then(() => {
+              console.log('✅ All imports resolved successfully');
+              process.exit(0);
+            })
+            .catch(err => {
+              console.error('❌ Module import failed:', err.message);
+              process.exit(1);
+            });
+        "
+      working-directory: ./${{ matrix.service-dir }}
+
+    - name: Smoke Test - Application Startup
+      run: |
+        echo "🔍 Testing application startup (10 second timeout)..."
+        # Start the app with fake env vars and timeout after 10s
+        # Exit code 124 = timeout (expected, means it ran successfully)
+        # Exit code 0 = exited normally (unexpected but acceptable)
+        # Any other code = crash (fail)
+        timeout 10s node dist/server.js \
+          --env DATABASE_URL=postgresql://fake:5432/test \
+          --env NODE_ENV=test \
+          --env PORT=8080 || EXIT_CODE=$?
+
+        if [ "${EXIT_CODE:-0}" -eq 124 ] || [ "${EXIT_CODE:-0}" -eq 0 ]; then
+          echo "✅ Application started successfully and ran for 10 seconds without crashing"
+          exit 0
+        else
+          echo "❌ Application crashed with exit code: ${EXIT_CODE}"
+          exit 1
+        fi
+      working-directory: ./${{ matrix.service-dir }}
+      env:
+        DATABASE_URL: postgresql://fake:5432/test
+        NODE_ENV: test
+        PORT: 8080

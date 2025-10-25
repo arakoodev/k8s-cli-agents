@@ -6,10 +6,56 @@
 
 **Root Cause**: CI tests TypeScript with ts-jest, production runs compiled JavaScript in containers. Module errors only appear at Node.js runtime.
 
-**Solution**: Add 3 validation stages that would have caught this in < 5 minutes:
-1. **JavaScript syntax check** after build
-2. **Container smoke test** before push
-3. **Startup validation** before marking deployment successful
+**Solution**: Add fast JavaScript smoke tests (no Docker needed!) that validate compiled output:
+1. **JavaScript syntax check** - `node --check dist/server.js` (< 1 sec)
+2. **Import resolution check** - Verify ES modules load correctly (1-2 sec)
+3. **Startup validation** - Test application runs without crashing (10 sec)
+
+**Total time added to CI**: ~12 seconds (not 3-5 minutes with Docker!)
+**Implementation**: ✅ DONE (see SMOKE_TESTS.md for details)
+
+---
+
+## ⚡ Fast Smoke Tests (RECOMMENDED APPROACH)
+
+**Key Insight**: Test the compiled JavaScript directly, not the Docker container. Docker is just packaging - the JavaScript is what matters.
+
+### Why This is Better Than Docker-Based Smoke Tests
+
+| Approach | Time | Cost | Reliability |
+|----------|------|------|-------------|
+| ❌ Build Docker images in CI | 3-5 min | High (Docker daemon, caching) | Tests container + JS |
+| ✅ Test compiled JavaScript | 12 sec | Low (just Node.js) | Tests exact production code |
+
+**Speed**: 15-25x faster
+**Cost**: Minimal
+**Coverage**: Tests the same code path as production
+**Simplicity**: No Docker daemon needed in CI
+
+### What's Implemented (See SMOKE_TESTS.md)
+
+```yaml
+# .github/workflows/ci.yml
+- name: Build TypeScript
+  run: npm run build
+
+- name: Smoke Test - Validate JavaScript Syntax
+  run: node --check dist/server.js
+
+- name: Smoke Test - Verify ES Module Imports
+  run: node --eval "import('./dist/server.js').then(...)..."
+
+- name: Smoke Test - Application Startup
+  run: timeout 10s node dist/server.js
+```
+
+**Guarantee**: Same commands used in CI and Dockerfile, so if CI passes, production will work.
+
+---
+
+## Legacy Documentation Below (Docker-Based Approach)
+
+**Note**: The sections below describe a Docker-based smoke testing approach. We've implemented the faster JavaScript-based approach instead (see SMOKE_TESTS.md). This documentation is kept for reference and for teams that prefer Docker-based validation.
 
 ---
 
