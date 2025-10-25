@@ -86,16 +86,6 @@ jest.mock('pg', () => {
   };
 });
 
-// Mock Firebase Admin SDK
-jest.mock('firebase-admin/auth', () => ({
-  getAuth: () => ({
-    verifyIdToken: jest.fn().mockResolvedValue({
-      uid: 'test-user-uid',
-      email: 'test@example.com',
-    }),
-  }),
-}));
-
 // Mock Kubernetes client
 jest.mock('@kubernetes/client-node', () => ({
   KubeConfig: class {
