@@ -14,9 +14,9 @@
     "migrate:make": "knex migrate:make --knexfile knexfile.js"
   },
   "dependencies": {
-    "@kubernetes/client-node": "^0.20.0",
+    "@kubernetes/client-node": "^1.4.0",
     "cors": "^2.8.5",
-    "express": "^4.18.2",
+    "express": "^4.22.1",
     "express-rate-limit": "^7.1.5",
     "jose": "^5.1.3",
     "knex": "^3.1.0",
